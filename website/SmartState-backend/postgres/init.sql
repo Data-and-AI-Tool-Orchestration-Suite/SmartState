@@ -149,6 +149,13 @@ FOR EACH ROW EXECUTE FUNCTION check_roles_validity();
 COMMIT;
 
 BEGIN;
+-- Insert the demo protocols
+INSERT INTO protocol_types (protocol_type_uuid, study, name) VALUES
+    ('00000000-0000-0000-0000-000000000001', 'Default', 'ReadGlucose'),
+    ('00000000-0000-0000-0000-000000000002', 'Default', 'Survey'),
+    ('00000000-0000-0000-0000-000000000003', 'Default', 'Inactive');
+
+
 -- Insert initial user into the database as an Admin. <ADMIN_EPPN> will be updated to the .env value 
 -- when the container is built
 INSERT INTO users (id, eppn, roles) VALUES

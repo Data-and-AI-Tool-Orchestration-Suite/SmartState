@@ -65,8 +65,26 @@ class Participant {
             $prune .= " OFFSET {$start} ROWS FETCH NEXT {$length} ROWS ONLY";
         if ($order_by == '' || $order_by == '0')
             $order_by = "participant_json->>'first_name'";
+        
+        // Sanitize order_by: Allow specific columns only
+        $allowed_columns = [
+            "participant_json->>'first_name'",
+            "participant_json->>'last_name'",
+            "study",
+            "participant_uuid"
+        ];
+        if (!in_array($order_by, $allowed_columns)) {
+            $order_by = "participant_json->>'first_name'";
+        }
+
         if ($order_dir == '')
             $order_dir = 'desc';
+        
+        // Sanitize order_dir
+        if (!in_array(strtoupper($order_dir), ['ASC', 'DESC'])) {
+            $order_dir = 'DESC';
+        }
+
         if (strlen($filter) > 0) {
             $filter = '%' . $filter . '%';
             $query .= " AND (participant_json->>'last_name' LIKE :filter)";
@@ -94,8 +112,19 @@ class Participant {
             $prune .= " OFFSET {$start} ROWS FETCH NEXT {$length} ROWS ONLY";
         if (is_null($order_by) || $order_by == '' || $order_by == '0')
             $order_by = 'ts';
+        
+        // Sanitize order_by
+        if (!preg_match('/^[a-zA-Z0-9_]+$/', $order_by)) {
+            $order_by = 'ts';
+        }
+
         if (is_null($order_dir) || $order_dir == '')
             $order_dir = 'desc';
+        
+        // Sanitize order_dir
+        if (!in_array(strtoupper($order_dir), ['ASC', 'DESC'])) {
+            $order_dir = 'DESC';
+        }
 
         $query .= " WHERE (participant_uuid = :uuid) AND (log_json->>'protocol' = :protocol)";
         if (!is_null($filter) && strlen($filter) > 0) {

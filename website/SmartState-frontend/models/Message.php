@@ -106,15 +106,26 @@ class Message {
             $prune .= " OFFSET {$start} ROWS FETCH NEXT {$length} ROWS ONLY";
         if (is_null($order_by) || $order_by == '' || $order_by == '0')
             $order_by = 'ts';
+        if ($order_by == '2') {
+            $order_by = 'ts';
+        }
+
+        // Sanitize order_by
+        if (!preg_match('/^[a-zA-Z0-9_]+$/', $order_by)) {
+            $order_by = 'ts';
+        }
+
         if (is_null($order_dir) || $order_dir == '')
             $order_dir = 'desc';
+        
+        // Sanitize order_dir
+        if (!in_array(strtoupper($order_dir), ['ASC', 'DESC'])) {
+            $order_dir = 'DESC';
+        }
+
         if (!is_null($filter) && strlen($filter) > 0) {
             $filter = '%' . $filter . '%';
             $query .= " AND (ts LIKE :filter)";
-        }
-
-        if ($order_by == '2') {
-            $order_by = 'ts';
         }
 
         $query .= " ORDER BY {$order_by} {$order_dir}{$prune}";
@@ -168,11 +179,22 @@ class Message {
             $order_by = 'ts';
         }
 
+        // Sanitize order_by
+        if (!preg_match('/^[a-zA-Z0-9_]+$/', $order_by)) {
+            $order_by = 'ts';
+        }
+
         $query .= " WHERE (participant_uuid = :uuid)";
         if (!is_null($filter) && strlen($filter) > 0) {
             $filter = '%' . $filter . '%';
             $query .= " AND (message_json->>'Body' LIKE :filter)";
         }
+        
+        // Sanitize order_dir
+        if (!in_array(strtoupper($order_dir), ['ASC', 'DESC'])) {
+            $order_dir = 'DESC';
+        }
+
         $query .= " ORDER BY {$order_by} {$order_dir}{$prune}";
         error_log($query);
         $stmt = PostgresDB::prepare($query);

@@ -31,7 +31,7 @@ include_once __DIR__ . '/../_header.php';
             <div class="row">
                 <div class="offset-md-1 col-md-10 offset-md-1">
                     <div class="collapse mb-2" id="state-machine">
-                        <div id="state-machine-content" class="card card-body"></div>
+                        <div id="state-machine-content" class="card card-body" style="min-height: 600px;"></div>
                     </div>
                 </div>
             </div>
@@ -62,8 +62,8 @@ include_once __DIR__ . '/../_header.php';
 
     <!-- These scripts read graphviz files -->
     <script src="https://d3js.org/d3.v5.min.js"></script>
-    <script src="https://unpkg.com/@hpcc-js/wasm@0.3.11/dist/index.min.js"></script>
-    <script src="https://unpkg.com/d3-graphviz@3.0.5/build/d3-graphviz.js"></script>
+    <script src="https://unpkg.com/@hpcc-js/wasm@1.20.1/dist/index.min.js"></script>
+    <script src="https://unpkg.com/d3-graphviz@4.1.0/build/d3-graphviz.js"></script>
    
     <script type="text/javascript">
         let collection = {};
@@ -183,7 +183,6 @@ include_once __DIR__ . '/../_header.php';
                                     updateDT();
                                     updateCurrentState();
                                     updateNextStates();
-                                    loadGraphFile();
                                 } else {
                                     console.error(data.error_message);
                                 }
@@ -200,6 +199,13 @@ include_once __DIR__ . '/../_header.php';
                     console.error(error);
                 }
             });
+
+            $('#state-machine').on('shown.bs.collapse', function () {
+                // Small delay to ensure the div has calculated its height
+                setTimeout(function() {
+                    loadGraphFile();
+                }, 50); 
+            });
         });
 
         $('#select-participant-state').on('changed.bs.select', function (e) {
@@ -213,7 +219,11 @@ include_once __DIR__ . '/../_header.php';
             updateDT();
             updateNextStates();
             updateCurrentState();
-            loadGraphFile();
+            
+            // Only render if we can actually see the container
+            if ($('#state-machine').hasClass('show')) {
+                loadGraphFile();
+            }
         });
 
         function updateCurrentState(){
@@ -328,13 +338,19 @@ include_once __DIR__ . '/../_header.php';
                     let content = data.content.replaceAll("\n", "");
                     if (data.success){
                         let currentState = $('#current-state').html();
+
+                        $("#state-machine-content").empty();
                         
-                        d3.select("#state-machine-content").graphviz().attributer(function(d){
-                            if (d.id.includes(currentState)) { //polygons are arrow points, text and g are text inside bubbles and connecting bubbles,
-                                if (d.tag == "path"){
-                                    if (d.id.includes("->")){
-                                        let drawArrows = d.id.split("->");
-                                        if (drawArrows[0].includes(currentState)){
+                        d3.select("#state-machine-content")
+                        .graphviz()
+                        .fit(true)
+                        .zoom(true)
+                        .attributer(function(d){
+                                if (d.id.includes(currentState)) { //polygons are arrow points, text and g are text inside bubbles and connecting bubbles,
+                                    if (d.tag == "path"){
+                                        if (d.id.includes("->")){
+                                            let drawArrows = d.id.split("->");
+                                            if (drawArrows[0].includes(currentState)){
                                             d.attributes.stroke = "#ff2500";
                                         }
                                     } else {
@@ -348,7 +364,7 @@ include_once __DIR__ . '/../_header.php';
                                     }
                                 }
                             }
-                        }).renderDot(data.content);
+                        }).renderDot(data.content));
                     }
                 },
                 error : function(request,error) {
