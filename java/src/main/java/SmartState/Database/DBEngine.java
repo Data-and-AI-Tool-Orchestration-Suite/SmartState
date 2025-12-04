@@ -20,18 +20,22 @@ import java.util.Map;
 public class DBEngine {
     private Gson gson;
     private DataSource ds;
+
     public DBEngine() {
 
         try {
             gson = new Gson();
-            //Driver needs to be identified in order to load the namespace in the JVM
+            // Driver needs to be identified in order to load the namespace in the JVM
             String dbDriver = "org.postgresql.Driver";
 
             Class.forName(dbDriver).newInstance();
 
-            String dbConnectionString = "jdbc:postgresql://" + Launcher.config.getStringParam("db_host") + ":" + Launcher.config.getStringParam("db_port") + "/" + Launcher.config.getStringParam("db_name");
+            String dbConnectionString = "jdbc:postgresql://" + Launcher.config.getStringParam("db_host") + ":"
+                    + Launcher.config.getStringParam("db_port") + "/" + Launcher.config.getStringParam("db_name")
+                    + "?ssl=false";
 
-            ds = setupDataSource(dbConnectionString, Launcher.config.getStringParam("db_user"), Launcher.config.getStringParam("db_password"));
+            ds = setupDataSource(dbConnectionString, Launcher.config.getStringParam("db_user"),
+                    Launcher.config.getStringParam("db_password"));
         } catch (Exception ex) {
             ex.printStackTrace();
         }
@@ -46,7 +50,7 @@ public class DBEngine {
         // arguments.
         //
         ConnectionFactory connectionFactory;
-        if((login == null) && (password == null)) {
+        if ((login == null) && (password == null)) {
             connectionFactory = new DriverManagerConnectionFactory(connectURI, null);
         } else {
             connectionFactory = new DriverManagerConnectionFactory(connectURI,
@@ -58,8 +62,7 @@ public class DBEngine {
         // the "real" Connections created by the ConnectionFactory with
         // the classes that implement the pooling functionality.
         //
-        PoolableConnectionFactory poolableConnectionFactory =
-                new PoolableConnectionFactory(connectionFactory, null);
+        PoolableConnectionFactory poolableConnectionFactory = new PoolableConnectionFactory(connectionFactory, null);
 
         //
         // Now we'll need a ObjectPool that serves as the
@@ -68,8 +71,7 @@ public class DBEngine {
         // We'll use a GenericObjectPool instance, although
         // any ObjectPool implementation will suffice.
         //
-        ObjectPool<PoolableConnection> connectionPool =
-                new GenericObjectPool<>(poolableConnectionFactory);
+        ObjectPool<PoolableConnection> connectionPool = new GenericObjectPool<>(poolableConnectionFactory);
 
         // Set the factory's pool property to the owning pool
         poolableConnectionFactory.setPool(connectionPool);
@@ -90,15 +92,20 @@ public class DBEngine {
             stmt = conn.createStatement();
             result = stmt.executeUpdate(stmtString);
 
-        } catch(Exception ex) {
+        } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return result;
     }
-
 
     public Map<String, String> getParticipantIdFromPhoneNumber(String phoneNumber) {
         Connection conn = null;
@@ -117,21 +124,30 @@ public class DBEngine {
                 participantId.put(rs.getString("study"), rs.getString("participant_uuid"));
             }
 
-        } catch(Exception ex) {
+        } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { rs.close(); }   catch (Exception e) { /* Null Ignored */ }
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return participantId;
     }
 
-    public List<Map<String,String>> getParticipantMapByGroup(String study, String groupName) {
+    public List<Map<String, String>> getParticipantMapByGroup(String study, String groupName) {
         Connection conn = null;
         PreparedStatement stmt = null;
         ResultSet rs = null;
-        List<Map<String,String>> participantMaps = null;
+        List<Map<String, String>> participantMaps = null;
         try {
             participantMaps = new ArrayList<>();
 
@@ -143,24 +159,33 @@ public class DBEngine {
             rs = stmt.executeQuery();
 
             while (rs.next()) {
-                Map<String,String> participantMap = gson.fromJson(rs.getString("participant_json"), Map.class);
-                participantMap.put("participant_uuid",rs.getString("participant_uuid"));
+                Map<String, String> participantMap = gson.fromJson(rs.getString("participant_json"), Map.class);
+                participantMap.put("participant_uuid", rs.getString("participant_uuid"));
                 participantMap.put("study", study);
                 participantMaps.add(participantMap);
             }
 
-        } catch(Exception ex) {
+        } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { rs.close(); }   catch (Exception e) { /* Null Ignored */ }
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
 
         return participantMaps;
     }
 
-    public String getEnrollmentUUIDFromName(String name){
+    public String getEnrollmentUUIDFromName(String name) {
         Connection conn = null;
         PreparedStatement stmt = null;
         ResultSet rs = null;
@@ -178,9 +203,18 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { rs.close();   } catch (Exception e) { /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return result;
     }
@@ -204,9 +238,18 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { rs.close();   } catch (Exception e) { /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return result;
     }
@@ -225,8 +268,14 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
     }
 
@@ -235,7 +284,7 @@ public class DBEngine {
         PreparedStatement stmt = null;
         try {
             String enrollment_uuid = getEnrollmentUUID(participant_uuid, protocol);
-            if(enrollment_uuid == null)
+            if (enrollment_uuid == null)
                 return false;
             pruneSaveStateEntries(enrollment_uuid);
             String query = "INSERT INTO save_state (enrollment_uuid, ts, state_json) VALUES (?::uuid, timezone('utc', now()), ?::jsonb)";
@@ -247,8 +296,14 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return true;
     }
@@ -272,9 +327,18 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { rs.close();   } catch (Exception e) { /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return result;
     }
@@ -297,9 +361,18 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { rs.close();   } catch (Exception e) { /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return json;
     }
@@ -326,9 +399,18 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { rs.close(); }   catch (Exception e) { /* Null Ignored */ }
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
     }
 
@@ -347,13 +429,22 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { rs.close(); }   catch (Exception e) { /* Null Ignored */ }
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
     }
 
-    public String getEnrollmentUUID(String uuid, String protocol){
+    public String getEnrollmentUUID(String uuid, String protocol) {
         Connection conn = null;
         PreparedStatement stmt = null;
         ResultSet rs = null;
@@ -372,9 +463,18 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { rs.close();   } catch (Exception e) { /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return result;
     }
@@ -397,9 +497,18 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { rs.close(); }   catch (Exception e) { /* Null Ignored */ }
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return adminNumbers;
     }
@@ -416,7 +525,7 @@ public class DBEngine {
             stmt = conn.prepareStatement(query);
             stmt.setString(1, participantUUID);
             rs = stmt.executeQuery();
-            
+
             if (rs.next()) {
                 token = rs.getString(1);
             }
@@ -424,9 +533,18 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { rs.close(); }   catch (Exception e) { /* Null Ignored */ }
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return token;
     }
@@ -451,9 +569,18 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { rs.close(); }   catch (Exception e) { /* Null Ignored */ }
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return participantId;
     }
@@ -473,8 +600,14 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
     }
 
@@ -498,9 +631,18 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { rs.close(); }   catch (Exception e) { /* Null Ignored */ }
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return result;
     }
@@ -511,23 +653,32 @@ public class DBEngine {
         ResultSet rs = null;
         String studies = "";
 
-        try{
+        try {
             String query = "SELECT study FROM participants WHERE participant_uuid=?";
             conn = ds.getConnection();
             stmt = conn.prepareStatement(query);
             stmt.setString(1, uuid);
             rs = stmt.executeQuery();
 
-            if (rs.next()){
+            if (rs.next()) {
                 studies = rs.getString("study");
             }
 
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { rs.close(); }   catch (Exception e) { /* Null Ignored */ }
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return studies;
     }
@@ -538,16 +689,16 @@ public class DBEngine {
         ResultSet rs = null;
         Map<String, List<String>> protocol = new HashMap<>();
 
-        try{
+        try {
             String query = "SELECT study, name FROM protocol_types WHERE protocol_type_uuid IN (SELECT protocol_type_uuid FROM enrollments WHERE participant_uuid = ? AND status = true)";
             conn = ds.getConnection();
             stmt = conn.prepareStatement(query);
             stmt.setString(1, uuid);
             rs = stmt.executeQuery();
 
-            while (rs.next()){
+            while (rs.next()) {
                 String study = rs.getString("study");
-                if (!protocol.containsKey(study)){
+                if (!protocol.containsKey(study)) {
                     protocol.put(study, new ArrayList<>());
                 }
                 protocol.get(study).add(rs.getString("name"));
@@ -556,9 +707,18 @@ public class DBEngine {
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { rs.close(); }   catch (Exception e) { /* Null Ignored */ }
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return protocol;
     }
@@ -569,23 +729,32 @@ public class DBEngine {
         ResultSet rs = null;
         String tz = "";
 
-        try{
+        try {
             String query = "SELECT participant_json->>'time_zone' AS tz FROM participants WHERE participant_uuid = ?::uuid";
             conn = ds.getConnection();
             stmt = conn.prepareStatement(query);
             stmt.setString(1, participantUUID);
             rs = stmt.executeQuery();
 
-            if(rs.next()){
+            if (rs.next()) {
                 tz = rs.getString("tz");
             }
 
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { rs.close(); }   catch (Exception e) { /* Null Ignored */ }
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                rs.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
         return tz;
     }
@@ -594,7 +763,7 @@ public class DBEngine {
         Connection conn = null;
         PreparedStatement stmt = null;
 
-        try{
+        try {
             String query = "UPDATE surveys SET finished_at=timezone('utc', now()), survey_json=?::jsonb WHERE token=?::uuid";
             conn = ds.getConnection();
             stmt = conn.prepareStatement(query);
@@ -602,12 +771,17 @@ public class DBEngine {
             stmt.setString(2, token);
             stmt.executeUpdate();
 
-
         } catch (Exception ex) {
             ex.printStackTrace();
         } finally {
-            try { stmt.close(); } catch (Exception e) { /* Null Ignored */ }
-            try { conn.close(); } catch (Exception e) { /* Null Ignored */ }
+            try {
+                stmt.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
+            try {
+                conn.close();
+            } catch (Exception e) {
+                /* Null Ignored */ }
         }
     }
 }

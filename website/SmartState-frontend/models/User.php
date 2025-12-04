@@ -196,8 +196,20 @@ class User implements JsonSerializable {
             $prune .= " OFFSET $start ROWS FETCH NEXT $length ROWS ONLY";
         if ($order_by == '' || $order_by == '0')
             $order_by = 'full_name';
+        
+        // Sanitize order_by: allow only alphanumeric and underscores
+        if (!preg_match('/^[a-zA-Z0-9_]+$/', $order_by)) {
+            $order_by = 'full_name';
+        }
+
         if ($order_dir == '')
             $order_dir = 'desc';
+        
+        // Sanitize order_dir: allow only ASC or DESC
+        if (!in_array(strtoupper($order_dir), ['ASC', 'DESC'])) {
+            $order_dir = 'DESC';
+        }
+
         if (strlen($filter) > 0) {
             $filter = '%' . $filter . '%';
             $query .= " WHERE (full_name LIKE :filter)";

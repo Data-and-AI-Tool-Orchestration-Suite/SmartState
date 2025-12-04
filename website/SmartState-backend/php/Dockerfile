@@ -1,5 +1,5 @@
 # This was updated with the latest *compatible* packages on 10/5/2023 by Sam. Let me know if something doesn't build properly.
-FROM php:8.5.0RC2-fpm-alpine
+FROM php:8.3-fpm-alpine
 
 RUN apk add libpq-dev \
     && docker-php-ext-configure pgsql -with-pgsql=/usr/local/pgsql \
