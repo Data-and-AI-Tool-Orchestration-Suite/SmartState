@@ -28,6 +28,14 @@ This information will help us triage your report more quickly.
 
 We prefer all communications to be in English.
 
+## Secrets
+
+No credentials are committed to this repository. `.env`, `website/SmartState-frontend/config.php`,
+and `java/config.ini` are the only secret carriers and are gitignored. TLS certificates and keys
+(`*.crt`, `*.key`) are gitignored and generated at deploy time. If a secret is ever exposed, rotate
+it (Postgres passwords, CILogon client secret, LLM API key, Twilio credentials) and report the
+exposure as described above.
+
 ## Policy
 
 CAAI follows the principle of [Coordinated Vulnerability Disclosure](https://aka.ms/security.md/cvd) from Microsoft.

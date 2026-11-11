@@ -70,8 +70,11 @@ public class Listener {
                         String participantUUID = Launcher.dbEngine.getParticipantIdFromDevice(bodyJson.get("devEUI").getAsString());
                         if (participantUUID.equals("")){
                             logger.error("Received packet from unknown/unregistered device.");
+                        } else {
+                            for (SmartState.Engine.MachineInstance machine : Launcher.machineRegistry.byParticipant(participantUUID)) {
+                                machine.submitDevicePacket(decoded);
+                            }
                         }
-                        Launcher.readGlucoseWatcher.receivedGlucoseMessage(participantUUID, decoded);
                         break;
                     default:
                         logger.info(topicStr + " not implemented");

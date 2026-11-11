@@ -3,6 +3,7 @@
 require_once __DIR__ . '/../utilities/CiLogonProvider.php';
 require_once MODELS_DIR . 'User.php';
 require_once MODELS_DIR . 'UserSession.php';
+require_once MODELS_DIR . 'Study.php';
 
 class RootController {
     public static function index(User $user): void {
@@ -79,6 +80,41 @@ class RootController {
         self::post_login_redirect();
     }
 
+    public static function selectStudy(User $user): void {
+        header('Content-Type: application/json');
+        $studyUuid = $_POST['study_uuid'] ?? '';
+        if ($studyUuid === '') {
+            http_response_code(400);
+            echo json_encode(['status' => 'error', 'error_message' => 'No study provided.']);
+            return;
+        }
+        $allowed = false;
+        if ($user->isSuperAdmin()) {
+            $allowed = !is_null(Study::withUUID($studyUuid));
+        } else {
+            foreach ($user->getMemberships() as $membership) {
+                if ($membership['study_uuid'] === $studyUuid) {
+                    $allowed = true;
+                    break;
+                }
+            }
+        }
+        if (!$allowed) {
+            http_response_code(403);
+            echo json_encode(['status' => 'error', 'error_message' => 'You do not have access to that study.']);
+            return;
+        }
+        $_SESSION['current_study'] = $studyUuid;
+        $user->setCurrentStudy($studyUuid);
+        if (isset($_SESSION['caai_session_id'])) {
+            $session = UserSession::withSessionID($_SESSION['caai_session_id']);
+            if (!is_null($session)) {
+                $session->setCurrentStudy($studyUuid);
+            }
+        }
+        echo json_encode(['status' => 'ok']);
+    }
+
     public static function logout($redirect = null, $logoutWithProvider = true): void {
         UserSession::delete(session_id());
         session_destroy();
@@ -128,7 +164,6 @@ class RootController {
         }
 
         // Close the cURL session
-        curl_close($ch);
 
         $decodedResponse = json_decode($response, true);
         return ["success" => true, "response" => $decodedResponse];
@@ -163,7 +198,6 @@ class RootController {
         }
 
         // Close the cURL session
-        curl_close($ch);
 
         // Decode and return the response
         $decodedResponse = json_decode($response, true);
@@ -216,7 +250,6 @@ class RootController {
         // Check for cURL errors
         if (curl_errno($ch)) {
             $error_message = curl_error($ch);
-            curl_close($ch);
             return ["success" => false, "error_message" => "Curl error: " . $error_message];
         }
 
@@ -225,7 +258,6 @@ class RootController {
         $responseBody = substr($response, $header_size);
 
         // Close the cURL session
-        curl_close($ch);
 
         // Decode and return the response
         $decodedResponse = json_decode($responseBody, true);

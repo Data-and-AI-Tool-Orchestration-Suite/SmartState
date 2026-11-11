@@ -6,10 +6,16 @@ include_once __DIR__ . '/../_header.php';
 ?>
     <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-2 mb-3 border-bottom">
         <h1 class="h4">Participants - <span class="text-muted">Overview</span></h1>
-        <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#participantModal">
-            <i class="fas fa-plus"></i>
-            Add Participant
-        </button>
+        <div>
+            <button id="show-hidden-btn" type="button" class="btn btn-secondary me-2">
+                <i class="fas fa-eye-slash"></i>
+                Show Hidden
+            </button>
+            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#participantModal">
+                <i class="fas fa-plus"></i>
+                Add Participant
+            </button>
+        </div>
     </div>
     <div class="row">
         <div class="col">
@@ -41,7 +47,7 @@ include_once __DIR__ . '/../_header.php';
     </div>
 
 
-    <div class="modal fade" id="participantModal" tabindex="-1" role="dialog" aria-labelledby="participantModalLabel" aria-hidden="true" data-study="null">
+    <div class="modal fade" id="participantModal" tabindex="-1" role="dialog" aria-labelledby="participantModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg" role="document">
             <div class="modal-content">
                 <div class="modal-header">
@@ -77,12 +83,12 @@ include_once __DIR__ . '/../_header.php';
                     <hr>
                     <div class="row">
                         <div class="col-md-6 form-floating ms-auto gx-1">
-                            <select class="selectpicker" id="participantModalGroup" data-live-search="true" title="--Select Protocol Types--" multiple></select>
+                            <select class="selectpicker" id="participantModalProtocols" data-live-search="true" title="--Select Protocols--" multiple></select>
                         </div>
                         <div class="col-sm-6 ms-auto gx-1">
                             <div class="form-floating mb-3">
-                                <input class="form-control" type="text" style="pointer-events: auto;" id="participantModalDevEUI" placeholder="Device EUI" />
-                                <label for="participantModalDevEUI">Glucose Device EUI</label>
+                                <input class="form-control" type="text" style="pointer-events: auto;" id="participantModalDevEUI" placeholder="Device EUI (optional)" />
+                                <label for="participantModalDevEUI">Device EUI (optional)</label>
                             </div>
                         </div>
                     </div>
@@ -108,14 +114,14 @@ include_once __DIR__ . '/../_header.php';
         var collection = {};
         var collectionTable = $('#collection');
         var collectionDataTable = null;
+        var showingHidden = false;
 
         $(function() {
             collectionDataTable = $('#collection').DataTable({
                 processing: true,
                 serverSide: true,
                 ajax: {
-                    url: "/participants/list",
-                    study: "Default"
+                    url: "<?= $rootURL ?>/participants/list"
                 },
                 order: [[ 0, "asc" ]],
                 responsive: true,
@@ -145,7 +151,13 @@ include_once __DIR__ . '/../_header.php';
                 pagingType: "full_numbers",
                 columns: [
                     {
-                        data: 'name'
+                        data: null,
+                        render: function ( data ) {
+                            if (data.hidden) {
+                                return data.name + " <span class='badge bg-warning text-dark'>Hidden</span>";
+                            }
+                            return data.name;
+                        }
                     },
                     {
                         data: 'number'
@@ -154,7 +166,7 @@ include_once __DIR__ . '/../_header.php';
                         data: 'email'
                     },
                     {
-                        data: 'group'
+                        data: 'protocols'
                     },
                     {
                       data: 'dev_eui'
@@ -162,11 +174,19 @@ include_once __DIR__ . '/../_header.php';
                     {
                         data: null,
                         render: function ( data ) {
+                            if (showingHidden) {
+                                return "<button class='btn btn-warning btn-xs' onclick='unhide_participant(\"" + data.id + "\");'>" +
+                                    "<span class='fas fa-eye' data-toggle='tooltip' data-placement='left' title='Unhide Participant'></span>" +
+                                    "</button>&nbsp;" +
+                                    "<button class='btn btn-danger btn-xs' onclick='delete_participant(\"" + data.id + "\");'>" +
+                                    "<span class='fas fa-user-slash' data-toggle='tooltip' data-placement='left' title='Delete Participant'></span>" +
+                                    "</button>";
+                            }
                             return "<button class='btn btn-primary btn-xs' onclick='edit_participant(\"" + data.id + "\");'>" +
                                 "<span class='fas fa-user-edit' data-toggle='tooltip' data-placement='left' title='Edit Participant'></span>" +
                                 "</button>&nbsp;" +
-                                "<button class='btn btn-danger btn-xs' onclick='delete_participant(\"" + data.id + "\");'>" +
-                                "<span class='fas fa-user-slash' data-toggle='tooltip' data-placement='left' title='Delete Participant'></span>" +
+                                "<button class='btn btn-warning btn-xs' onclick='hide_participant(\"" + data.id + "\");'>" +
+                                "<span class='fas fa-eye-slash' data-toggle='tooltip' data-placement='left' title='Hide Participant'></span>" +
                                 "</button>";
                         }
                     }
@@ -184,14 +204,15 @@ include_once __DIR__ . '/../_header.php';
             });
 
             $.ajax({
-                url : '/participants/fill-group-dropdown',
+                url : '<?= $rootURL ?>/protocols/list-published',
                 type : 'GET',
 
                 success : function(data) {
-                    data['data'].forEach(function(currentValue, index, arr){
-                        $('#participantModalGroup').append("<option value='"+currentValue['name']+"'>"+ currentValue['name'] +"</option>");
+                    let published = data.protocols || data.data || data;
+                    published.forEach(function(currentValue, index, arr){
+                        $('#participantModalProtocols').append("<option value='"+currentValue['definition_uuid']+"'>"+ currentValue['label'] +"</option>");
                      });
-                     $('#participantModalGroup').selectpicker('refresh');
+                     $('#participantModalProtocols').selectpicker('refresh');
                 },
                 error : function(request,error) {
                     console.error(error);
@@ -251,8 +272,8 @@ include_once __DIR__ . '/../_header.php';
             $('#participantModalNumber').val('');
             $('#participantModalEmail').val('');
             $('#participantModalDevEUI').val('');
-            $('#participantModalGroup').val('');
-            $('#participantModalGroup').selectpicker('refresh');
+            $('#participantModalProtocols').val('');
+            $('#participantModalProtocols').selectpicker('refresh');
             $('#participantModalLocation').val('');
             $('#participantModalLocation').selectpicker('refresh');
             $('#participantModalTimeZone').val('');
@@ -289,8 +310,14 @@ include_once __DIR__ . '/../_header.php';
                     $('#participantModalNumber').val(info['number']);
                     $('#participantModalEmail').val(info['email']);
                     $('#participantModalDevEUI').val(info['devEUI']);
-                    $('#participantModalGroup').val(info['group']);
-                    $('#participantModalGroup').selectpicker('refresh');
+                    let activeDefinitions = [];
+                    (data['enrollments'] || []).forEach(function(enrollment){
+                        if (enrollment.active) {
+                            activeDefinitions.push(enrollment.definition_uuid);
+                        }
+                    });
+                    $('#participantModalProtocols').val(activeDefinitions);
+                    $('#participantModalProtocols').selectpicker('refresh');
                     $('#participantModalLocation').val(info['location']);
                     $('#participantModalLocation').selectpicker('refresh');
                     fillTimeZones(info['time_zone']);
@@ -302,17 +329,16 @@ include_once __DIR__ . '/../_header.php';
             });
         }
 
-        function update_participant() {
-            let id = $('#participantModalId').val();
+        function validate_participant_form() {
             let firstName = $('#participantModalFirstName').val();
             let lastName = $('#participantModalLastName').val();
             if (firstName === "") {
                 showError("Please enter participants first name.");
-                return false;
+                return null;
             }
             if (lastName === "") {
                 showError("Please enter participants last name.");
-                return false;
+                return null;
             }
 
             firstName = firstName.trim();
@@ -321,65 +347,78 @@ include_once __DIR__ . '/../_header.php';
             let number = $('#participantModalNumber').val();
             if (number.length !== 10) {
                 showError("Please enter the participants 10 digit phone number.");
-                return false;
+                return null;
             }
 
             if(/[a-z]/i.test(number)){
                 showError("Phone numbers cannot contain letters.");
-                return false;
+                return null;
             }
             number = '+1' + number;
 
-            // Email
             let email = $('#participantModalEmail').val();
 
             if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
                 showError("Please enter a valid email address.");
-                return false;
+                return null;
             }
 
             let devEUI = $('#participantModalDevEUI').val().toLowerCase()
             if (devEUI.length > 0 && devEUI.length !== 16){
-                showError("Your Glucose device EUI should be 16 characters long. Please check your entry.");
-                return false;
+                showError("Your device EUI should be 16 characters long. Please check your entry.");
+                return null;
             }
 
-            let group = $('#participantModalGroup').val();
-            if (group === null || group.length === 0) {
-                showError("Please select a protocol type.");
-                return false;
+            let definitions = $('#participantModalProtocols').val();
+            if (definitions === null || definitions.length === 0) {
+                showError("Please select a protocol.");
+                return null;
             }
 
             let timeZone = $('#participantModalTimeZone').val();
             if (timeZone == null) {
                 showError("Please select the participant's time zone.");
+                return null;
+            }
+
+            return {
+                info: {
+                    "first_name": firstName,
+                    "last_name": lastName,
+                    "number": number,
+                    "email": email,
+                    "devEUI": devEUI,
+                    "time_zone": timeZone
+                },
+                definition_uuids: definitions
+            };
+        }
+
+        function update_participant() {
+            let id = $('#participantModalId').val();
+            let form = validate_participant_form();
+            if (form === null) {
                 return false;
             }
 
-            let participant_info = {
-                "first_name": firstName,
-                "last_name": lastName,
-                "number": number,
-                "email": email,
-                "devEUI": devEUI,
-                "group": group,
-                "time_zone": timeZone
-            }
-
-            let encoded_participant = JSON.stringify(participant_info);
+            let encoded_participant = JSON.stringify(form.info);
             $.ajax({
                 url : '<?= $rootURL?>/participants/update-participant',
                 type : 'POST',
                 data : {
-                    'info':encoded_participant,
+                    'info': encoded_participant,
                     'id': id,
-                    'study': 'Default'
+                    'definition_uuids': form.definition_uuids
                 },
                 success : function(data) {
-
-                    $('#participantModal').modal('hide');
-                    collectionDataTable.ajax.reload();
-                    showSuccess("Participant updated.");
+                    if (data.success) {
+                        $('#participantModal').modal('hide');
+                        collectionDataTable.ajax.reload();
+                        showSuccess("Participant updated.");
+                    } else {
+                        showError("Could not update participant.");
+                        showError(data.error_message);
+                    }
                 },
                 error : function(request,error){
                     showError("Could not update participant.");
@@ -388,74 +427,17 @@ include_once __DIR__ . '/../_header.php';
         }
 
          function add_participant() {
-            let firstName = $('#participantModalFirstName').val();
-            let lastName = $('#participantModalLastName').val();
-            if (firstName === "") {
-                showError("Please enter participants first name.");
+            let form = validate_participant_form();
+            if (form === null) {
                 return false;
-            }
-            if (lastName === "") {
-                showError("Please enter participants last name.");
-                return false;
-            }
-
-            firstName = firstName.trim();
-            lastName  = lastName.trim();
-
-            let number = $('#participantModalNumber').val();
-            if (number.length !== 10) {
-                showError("Please enter the participants 10 digit phone number.");
-                return false;
-            }
-
-            if(/[a-z]/i.test(number)){
-                showError("Phone numbers cannot contain letters.");
-                return false;
-            }
-            number = '+1' + number;
-
-            // Email
-            let email = $('#participantModalEmail').val();
-
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                showError("Please enter a valid email address.");
-                return false;
-            }
-
-            let devEUI = $('#participantModalDevEUI').val().toLowerCase()
-            if (devEUI.length > 0 && devEUI.length !== 16){
-                showError("Your Glucose device EUI should be 16 characters long. Please check your entry.");
-                return false;
-            }
-
-            let group = $('#participantModalGroup').val();
-            if (group === null || group.length === 0) {
-                showError("Please select a protocol type.");
-                return false;
-            }
-
-            let timeZone = $('#participantModalTimeZone').val();
-            if (timeZone == null) {
-                showError("Please select the participant's time zone.");
-                return false;
-            }
-
-            let participant_info = {
-                "first_name": firstName,
-                "last_name": lastName,
-                "number": number,
-                "email": email,
-                "devEUI": devEUI,
-                "group": group,
-                "time_zone": timeZone
             }
 
             $.ajax({
                 url : '<?= $rootURL ?>/participants/add-participant',
                 type : 'POST',
                 data : {
-                    'info': participant_info,
-                    'study': 'Default'
+                    'info': form.info,
+                    'definition_uuids': form.definition_uuids
                 },
 
                 success : function(data) {
@@ -500,6 +482,74 @@ include_once __DIR__ . '/../_header.php';
                 });
             }
         }
+
+        function hide_participant(id) {
+            let isExecuted = confirm("Are you sure you want to hide this participant? Messages from this participant will be hidden.");
+            if (isExecuted) {
+                $.ajax({
+                    url: '<?= $rootURL ?>/participants/hide',
+                    type: 'POST',
+                    data: {
+                        'id': id
+                    },
+                    success: function(data) {
+                        if (data.success) {
+                            showSuccess("Hid Participant.");
+                            collectionDataTable.ajax.reload();
+                        } else {
+                            showError(data.error_message);
+                            return null;
+                        }
+                    },
+                    error: function (xhr, status, error) {
+                        showError("Error communicating with the server.");
+                        return null;
+                    }
+                });
+            }
+        }
+
+        function unhide_participant(id) {
+            let isExecuted = confirm("Are you sure you want to unhide this participant? Messages from this participant will be visible again.");
+            if (isExecuted) {
+                $.ajax({
+                    url: '<?= $rootURL ?>/participants/unhide',
+                    type: 'POST',
+                    data: {
+                        'id': id
+                    },
+                    success: function(data) {
+                        if (data.success) {
+                            showSuccess("Unhid Participant.");
+                            collectionDataTable.ajax.reload();
+                        } else {
+                            showError(data.error_message);
+                            return null;
+                        }
+                    },
+                    error: function (xhr, status, error) {
+                        showError("Error communicating with the server.");
+                        return null;
+                    }
+                });
+            }
+        }
+
+        $('#show-hidden-btn').click(function() {
+            if ($(this).hasClass('btn-secondary')) {
+                $(this).removeClass('btn-secondary');
+                $(this).addClass('btn-warning');
+                $(this).html('<i class="fas fa-eye"></i> Hide Hidden');
+                showingHidden = true;
+                collectionDataTable.ajax.url('<?= $rootURL ?>/participants/list?showHidden=true').load();
+            } else {
+                $(this).removeClass('btn-warning');
+                $(this).addClass('btn-secondary');
+                $(this).html('<i class="fas fa-eye-slash"></i> Show Hidden');
+                showingHidden = false;
+                collectionDataTable.ajax.url('<?= $rootURL ?>/participants/list').load();
+            }
+        });
     </script>
 <?php
 include_once __DIR__ . '/../_footer.php';

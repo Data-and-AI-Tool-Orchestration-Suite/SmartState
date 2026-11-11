@@ -1,9 +1,9 @@
 {
-  "name": "vendor_name/orders",
-  "description": "description",
-  "version": "1.0.0",
+  "name": "kentucky-open-science/smartstate",
+  "description": "SmartState multi-tenant research protocol platform",
+  "version": "2.0.0",
   "minimum-stability": "stable",
-  "license": "proprietary",
+  "license": "Apache-2.0",
   "authors": [
     {
       "name": "Caylin Hickey",
@@ -19,6 +19,7 @@
     }
   ],
   "require": {
+    "php": ">=8.4",
     "altorouter/altorouter": "2.0.2",
     "ext-pdo": "*",
     "ext-json": "*",
@@ -27,10 +28,12 @@
     "league/oauth2-client": "^2.8",
     "guzzlehttp/guzzle": "*",
     "aws/aws-sdk-php": "^3.317.2",
-    "pestphp/pest": "*",
-    "mockery/mockery": "*",
-    "twilio/sdk": "^8.0",
+    "twilio/sdk": "^8.3",
     "ext-curl": "*"
+  },
+  "require-dev": {
+    "pestphp/pest": "*",
+    "mockery/mockery": "*"
   },
   "config": {
     "allow-plugins": {

@@ -1,26 +1,42 @@
 package SmartState.Webapi;
 
+import SmartState.Engine.MachineInstance;
+import SmartState.Engine.ProtocolDefinition;
+import SmartState.Engine.ProtocolDefinitionParser;
+import SmartState.Engine.Simulation;
 import SmartState.Launcher;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.twilio.security.RequestValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.inject.Inject;
-import javax.ws.rs.*;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.MultivaluedMap;
-import javax.ws.rs.core.Response;
+import jakarta.inject.Inject;
+import jakarta.inject.Provider;
+import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.Response;
 import java.io.PrintWriter;
 import java.io.StringWriter;
-import java.util.*;
-
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 @Path("/api")
 public class API {
 
     @Inject
-    private javax.inject.Provider<org.glassfish.grizzly.http.server.Request> request;
+    private Provider<org.glassfish.grizzly.http.server.Request> request;
     private final Gson gson;
     private final Logger logger = LoggerFactory.getLogger(API.class);
 
@@ -33,170 +49,121 @@ public class API {
     @Consumes({MediaType.APPLICATION_FORM_URLENCODED})
     @Produces(MediaType.APPLICATION_JSON)
     public Response incomingText(MultivaluedMap<String, String> formParams) {
-        String responseString = null;
+        String responseString;
         try {
+            if (!validTwilioSignature(formParams, "/api/incoming")) {
+                return Response.status(403).entity("{\"status\":\"error\",\"status_desc\":\"invalid signature\"}").build();
+            }
 
-            String messageId;
-            Map<String, String> participantIds = Launcher.dbEngine.getParticipantIdFromPhoneNumber(formParams.get("From").get(0));
+            List<Map<String, String>> participants = Launcher.dbEngine.getParticipantsByPhone(first(formParams, "From"));
 
-            if (!participantIds.isEmpty()) {
-                String messageDirection = "incoming";
-
+            if (!participants.isEmpty()) {
                 Map<String, String> formsMap = convertMultiToRegularMap(formParams);
                 String json_string = gson.toJson(formsMap);
 
-                // get protocols
-                List<String> studies = new ArrayList<>();
-                for (Map.Entry<String, String> entry : participantIds.entrySet()) {
-                    if (entry.getKey().equals("ADMIN")){
+                for (Map<String, String> participant : participants) {
+                    Launcher.dbEngine.insertIncomingMessage(participant.get("participant_uuid"), participant.get("study_uuid"), json_string);
+
+                    List<MachineInstance> machines = Launcher.machineRegistry.byParticipant(participant.get("participant_uuid"));
+                    if (machines.isEmpty()) {
+                        logger.error("Text from participant with no active protocols");
                         continue;
                     }
-                    studies.add(Launcher.dbEngine.getStudyFromParticipantId(entry.getValue()));
-                }
-
-                for (String study : studies) {
-                    messageId = UUID.randomUUID().toString();
-                    String participantId = participantIds.get(study);
-
-                    String insertQuery = "INSERT INTO messages " +
-                            "(message_uuid, participant_uuid, ts, message_direction, study, message_json)" +
-                            " VALUES ('" + messageId + "', '" +
-                            participantId + "' , NOW(), '" +
-                            messageDirection + "', '" + study + "', '" + json_string +
-                            "')";
-
-                    //record incoming
-                    Launcher.dbEngine.executeUpdate(insertQuery);
-
-                    //send to state machine
-                    Map<String, List<String>> protocol = Launcher.dbEngine.getProtocolFromParticipantId(participantId);
-                    switch (study) {
-                        case "Default":
-                            if (protocol.get(study).contains("ReadGlucose")) {
-                                Launcher.readGlucoseWatcher.incomingText(participantId, formsMap);
-                            }
-                            if (protocol.get(study).contains("Survey")) {
-                                // do nothing, survey doesn't receive text messages
-                            }
-                            if (protocol.get(study).isEmpty()) {
-                                logger.error("Text from participant not enrolled in any Default protocol");
-                            }
+                    String body = formsMap.get("Body");
+                    MachineInstance helpHandler = null;
+                    for (MachineInstance machine : machines) {
+                        if (machine.matchesHelp(body)) {
+                            helpHandler = machine;
                             break;
-
-                        default:
-                            logger.error("Text from participant not enrolled in any study");
-                            break;
+                        }
                     }
-
-                    Map<String, String> response = new HashMap<>();
-                    response.put("status", "ok");
-                    responseString = gson.toJson(response);
+                    if (helpHandler != null) {
+                        helpHandler.submitHelp();
+                        continue;
+                    }
+                    boolean ignored = false;
+                    for (MachineInstance machine : machines) {
+                        if (machine.smsIgnores(body)) {
+                            ignored = true;
+                            break;
+                        }
+                    }
+                    if (ignored) {
+                        continue;
+                    }
+                    List<MachineInstance> handlers = new java.util.ArrayList<>();
+                    for (MachineInstance machine : machines) {
+                        if (machine.smsHandles(body)) {
+                            handlers.add(machine);
+                        }
+                    }
+                    if (!handlers.isEmpty()) {
+                        for (MachineInstance machine : handlers) {
+                            machine.submitSms(formsMap);
+                        }
+                    } else {
+                        for (MachineInstance machine : machines) {
+                            if (machine.hasSmsFallback()) {
+                                machine.submitSms(formsMap);
+                                break;
+                            }
+                        }
+                    }
                 }
 
+                Map<String, String> response = new HashMap<>();
+                response.put("status", "ok");
+                responseString = gson.toJson(response);
             } else {
-                Map<String,String> response = new HashMap<>();
-                response.put("status","error");
-                response.put("status_desc","participant not found");
+                Map<String, String> response = new HashMap<>();
+                response.put("status", "error");
+                response.put("status_desc", "participant not found");
                 responseString = gson.toJson(response);
             }
         } catch (Exception ex) {
-            StringWriter sw = new StringWriter();
-            ex.printStackTrace(new PrintWriter(sw));
-            String exceptionAsString = sw.toString();
-            ex.printStackTrace();
-            logger.error("incomingText");
-            logger.error(exceptionAsString);
-
-            return Response.status(500).entity(exceptionAsString).build();
+            return serverError(ex, "incomingText");
         }
-        //return accesslog data
         return Response.ok(responseString).header("Access-Control-Allow-Origin", "*").build();
     }
 
-    // Received the LoRaWAN messages from the MQTT listener
     @POST
     @Path("/message")
     @Consumes({MediaType.APPLICATION_FORM_URLENCODED})
     @Produces(MediaType.APPLICATION_JSON)
     public Response incomingMessage(MultivaluedMap<String, String> formParams) {
-        String responseString = null;
+        String responseString;
         try {
-            String messageId;
-            Map<String, String> participantIds = Launcher.dbEngine.getParticipantIdFromPhoneNumber(formParams.get("From").get(0));
+            List<Map<String, String>> participants = Launcher.dbEngine.getParticipantsByPhone(first(formParams, "From"));
 
-            if (!participantIds.isEmpty()) {
-                String messageDirection = "incoming";
-
+            if (!participants.isEmpty()) {
                 Map<String, String> formsMap = convertMultiToRegularMap(formParams);
                 String json_string = gson.toJson(formsMap);
 
-                // get protocols
-                List<String> studies = new ArrayList<>();
-                for (Map.Entry<String, String> entry : participantIds.entrySet()) {
-                    if(entry.getKey().equals("ADMIN")){
+                for (Map<String, String> participant : participants) {
+                    Launcher.dbEngine.insertIncomingMessage(participant.get("participant_uuid"), participant.get("study_uuid"), json_string);
+
+                    List<MachineInstance> machines = Launcher.machineRegistry.byParticipant(participant.get("participant_uuid"));
+                    if (machines.isEmpty()) {
+                        logger.error("Device message from participant with no active protocols");
                         continue;
                     }
-                    studies.add(Launcher.dbEngine.getStudyFromParticipantId(entry.getValue()));
-                }
-
-                for (String study : studies) {
-                    messageId = UUID.randomUUID().toString();
-                    String participantId = participantIds.get(study);
-
-                    String insertQuery = "INSERT INTO messages " +
-                            "(message_uuid, participant_uuid, ts, message_direction, study, message_json)" +
-                            " VALUES ('" + messageId + "', '" +
-                            participantId + "' , NOW(), '" +
-                            messageDirection + "', '" + study + "', '" + json_string +
-                            "')";
-
-                    //record incoming
-                    Launcher.dbEngine.executeUpdate(insertQuery);
-
-                    //send to state machine
-                    Map<String, List<String>> protocol = Launcher.dbEngine.getProtocolFromParticipantId(participantId);
-                    switch (study) {
-                        case "Default":
-                            if (protocol.get(study).contains("ReadGlucose")) {
-                                Launcher.readGlucoseWatcher.incomingMessage(participantId, formsMap);
-                            }
-                            if (protocol.get(study).contains("Survey")) {
-                                // do nothing, survey doesn't receive LoRaWAN messages
-                            }
-                            if (protocol.get(study).isEmpty()) {
-                                logger.error("LoRa message from participant not enrolled in any Default protocol");
-                            }
-                            break;
-
-                        default:
-                            logger.error("LoRa message from participant not enrolled in any study");
-                            break;
+                    for (MachineInstance machine : machines) {
+                        machine.submitCommandMessage(formsMap);
                     }
-
-                    Map<String, String> responce = new HashMap<>();
-                    responce.put("status", "ok");
-                    responseString = gson.toJson(responce);
                 }
 
+                Map<String, String> response = new HashMap<>();
+                response.put("status", "ok");
+                responseString = gson.toJson(response);
             } else {
-                Map<String,String> responce = new HashMap<>();
-                responce.put("status","error");
-                responce.put("status_desc","participant not found");
-                responseString = gson.toJson(responce);
+                Map<String, String> response = new HashMap<>();
+                response.put("status", "error");
+                response.put("status_desc", "participant not found");
+                responseString = gson.toJson(response);
             }
-
         } catch (Exception ex) {
-
-            StringWriter sw = new StringWriter();
-            ex.printStackTrace(new PrintWriter(sw));
-            String exceptionAsString = sw.toString();
-            ex.printStackTrace();
-            logger.error("incomingMessage");
-            logger.error(exceptionAsString);
-
-            return Response.status(500).entity(exceptionAsString).build();
+            return serverError(ex, "incomingMessage");
         }
-        //return accesslog data
         return Response.ok(responseString).header("Access-Control-Allow-Origin", "*").build();
     }
 
@@ -206,31 +173,30 @@ public class API {
     public Response getAccessLog() {
         String responseString;
         try {
-
-            //get remote ip address from request
             String remoteIP = request.get().getRemoteAddr();
-            //get the timestamp of the request
             long access_ts = System.currentTimeMillis();
             logger.info("IP: " + remoteIP + " Timestamp: " + access_ts);
 
-            Map<String,String> responseMap = new HashMap<>();
+            Map<String, String> responseMap = new HashMap<>();
             responseMap.put("ip", remoteIP);
             responseMap.put("timestamp", String.valueOf(access_ts));
-
             responseString = gson.toJson(responseMap);
-
-
         } catch (Exception ex) {
-
-            StringWriter sw = new StringWriter();
-            ex.printStackTrace(new PrintWriter(sw));
-            String exceptionAsString = sw.toString();
-            ex.printStackTrace();
-
-            return Response.status(500).entity(exceptionAsString).build();
+            return serverError(ex, "check");
         }
-        //return accesslog data
         return Response.ok(responseString).header("Access-Control-Allow-Origin", "*").build();
+    }
+
+    @GET
+    @Path("/health")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response health() {
+        Map<String, String> responseMap = new HashMap<>();
+        boolean dbUp = Launcher.dbEngine.isHealthy();
+        responseMap.put("status", dbUp ? "ok" : "degraded");
+        responseMap.put("db", dbUp ? "up" : "down");
+        responseMap.put("machines", String.valueOf(Launcher.machineRegistry.size()));
+        return Response.status(dbUp ? 200 : 503).entity(gson.toJson(responseMap)).build();
     }
 
     @GET
@@ -242,38 +208,41 @@ public class API {
         String responseString;
         try {
             if (!participantId.equals("")) {
-                // this returns a comma delimited list as a string
                 String validNextStates = "";
-                if (participantStudy.equals("Default")) {
-                    if (participantProtocol.equals("ReadGlucose")) {
-                        validNextStates = Launcher.readGlucoseWatcher.getValidNextStates(participantId);
-                    } else if (participantProtocol.equals("Survey")) {
-                        validNextStates = Launcher.surveyWatcher.getValidNextStates(participantId);
+                MachineInstance machine = Launcher.machineRegistry.byParticipantAndProtocol(participantId, participantProtocol);
+                if (machine != null) {
+                    validNextStates = machine.validNextStates();
+                } else {
+                    Map<String, String> enrollment = Launcher.dbEngine.getActiveEnrollment(participantId, participantProtocol);
+                    if (enrollment != null) {
+                        ProtocolDefinition def = Launcher.protocolRegistry.get(enrollment.get("definition_uuid"));
+                        String currentState = Launcher.dbEngine.getParticipantCurrentState(participantId, participantProtocol);
+                        if (def != null && def.state(currentState) != null) {
+                            StringBuilder sb = new StringBuilder();
+                            for (ProtocolDefinition.ManualMove move : def.state(currentState).manualMoves) {
+                                if (sb.length() > 0) {
+                                    sb.append(",");
+                                }
+                                sb.append(move.to);
+                            }
+                            validNextStates = sb.toString();
+                        }
                     }
                 }
 
-                Map<String,String> response = new HashMap<>();
-                response.put("status","ok");
+                Map<String, String> response = new HashMap<>();
+                response.put("status", "ok");
                 response.put("valid_states", validNextStates);
                 responseString = gson.toJson(response);
-
             } else {
-                Map<String,String> response = new HashMap<>();
-                response.put("status","error");
-                response.put("status_desc","participant not found");
+                Map<String, String> response = new HashMap<>();
+                response.put("status", "error");
+                response.put("status_desc", "participant not found");
                 responseString = gson.toJson(response);
             }
-
         } catch (Exception ex) {
-            StringWriter sw = new StringWriter();
-            ex.printStackTrace(new PrintWriter(sw));
-            String exceptionAsString = sw.toString();
-            ex.printStackTrace();
-            logger.error("getNextStates");
-            logger.error(exceptionAsString);
-            return Response.status(500).entity(exceptionAsString).build();
+            return serverError(ex, "getNextStates");
         }
-        //return state moved to
         return Response.ok(responseString).header("Access-Control-Allow-Origin", "*").build();
     }
 
@@ -282,95 +251,62 @@ public class API {
     @Path("/next-state")
     @Produces(MediaType.APPLICATION_JSON)
     public Response moveToNextState(MultivaluedMap<String, String> data) {
-
-        String participantId = data.get("participantUUID").get(0);
-        String nextState = data.get("toState").get(0);
-        String time = data.get("time").get(0);
-        String study = data.get("study").get(0);
-        String protocol = data.get("protocol").get(0);
-        String responseString = "";
+        String responseString;
         try {
+            String participantId = first(data, "participantUUID");
+            String nextState = first(data, "toState");
+            String protocol = first(data, "protocol");
+            String time = first(data, "time");
 
             if (participantId != null) {
-                //send to state machine
+                MachineInstance machine = Launcher.machineRegistry.byParticipantAndProtocol(participantId, protocol);
                 String newState = "";
-                if (study.equals("Default")) {
-                    if (protocol.equals("ReadGlucose")) {
-                        newState = Launcher.readGlucoseWatcher.moveToState(participantId, nextState, time);
-                    } else if (protocol.equals("Survey")) {
-                        newState = Launcher.surveyWatcher.moveToState(participantId, nextState, time);
-                    }
+                if (machine != null) {
+                    newState = machine.moveTo(nextState, time).get(30, TimeUnit.SECONDS);
                 }
 
-                Map<String,String> response = new HashMap<>();
-                response.put("status","ok");
+                Map<String, String> response = new HashMap<>();
+                response.put("status", "ok");
                 response.put("moved_to_state", newState);
                 responseString = gson.toJson(response);
-
             } else {
-                Map<String,String> response = new HashMap<>();
-                response.put("status","error");
-                response.put("status_desc","participant not found");
+                Map<String, String> response = new HashMap<>();
+                response.put("status", "error");
+                response.put("status_desc", "participant not found");
                 responseString = gson.toJson(response);
             }
-
         } catch (Exception ex) {
-            StringWriter sw = new StringWriter();
-            String exceptionAsString = sw.toString();
-            ex.printStackTrace();
-            logger.error("moveToNextState");
-            logger.error(exceptionAsString);
-
-            return Response.status(500).entity(exceptionAsString).build();
+            return serverError(ex, "moveToNextState");
         }
-        //return state moved to
         return Response.ok(responseString).header("Access-Control-Allow-Origin", "*").build();
     }
-
 
     @POST
     @Path("/reset-machine")
     @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
     @Produces(MediaType.APPLICATION_JSON)
     public Response resetStateMachine(MultivaluedMap<String, String> data) {
-
         String responseString;
         try {
-            String participantId = data.get("uuid").get(0);
-            String study = data.get("study").get(0);
-            String protocol = data.get("protocol").get(0);
+            String participantId = first(data, "uuid");
+            String protocol = first(data, "protocol");
             if (participantId != null) {
-                if (study.equals("Default")) {
-                    if (protocol.equals("ReadGlucose")) {
-                        Launcher.readGlucoseWatcher.resetStateMachine(participantId);
-                    } else if (protocol.equals("Survey")) {
-                        Launcher.surveyWatcher.resetStateMachine(participantId);
-                    } else {
-                        logger.error("Cannot reset machine, participant not in an active protocol.");
-                    }
+                String enrollmentUuid = Launcher.enrollmentWatcher.resetMachine(participantId, protocol);
+                if (enrollmentUuid == null) {
+                    logger.error("Cannot reset machine, participant not in an active protocol.");
                 }
 
-                Map<String,String> response = new HashMap<>();
+                Map<String, String> response = new HashMap<>();
                 response.put("status", "ok");
                 responseString = gson.toJson(response);
-
             } else {
-                Map<String,String> response = new HashMap<>();
-                response.put("status","error");
-                response.put("status_desc","participant not found");
+                Map<String, String> response = new HashMap<>();
+                response.put("status", "error");
+                response.put("status_desc", "participant not found");
                 responseString = gson.toJson(response);
             }
-
         } catch (Exception ex) {
-
-            StringWriter sw = new StringWriter();
-            ex.printStackTrace(new PrintWriter(sw));
-            String exceptionAsString = sw.toString();
-            ex.printStackTrace();
-            logger.error("resetStateMachine");
-            logger.error(exceptionAsString);
-
-            return Response.status(500).entity(exceptionAsString).build();
+            return serverError(ex, "resetStateMachine");
         }
         return Response.ok(responseString).header("Access-Control-Allow-Origin", "*").build();
     }
@@ -380,30 +316,24 @@ public class API {
     @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
     @Produces(MediaType.APPLICATION_JSON)
     public Response updateTimeZone(MultivaluedMap<String, String> data) {
-
         String responseString;
         try {
-            String participantId = data.get("uuid").get(0);
+            String participantId = first(data, "uuid");
             String tz = data.getFirst("tz");
-            String study = data.getFirst("study");
             String protocolsJson = data.getFirst("protocols");
             ObjectMapper objectMapper = new ObjectMapper();
             List<String> protocols = objectMapper.readValue(protocolsJson, List.class);
             if (participantId != null) {
-                for(int i = 0; i < protocols.size(); i++) {
-                    if (study.equals("Default")) {
-                        if (protocols.get(i).equals("ReadGlucose")) {
-                            Launcher.readGlucoseWatcher.updateTimeZone(participantId, tz);
-                        } else if (protocols.get(i).equals("Survey")) {
-                            Launcher.surveyWatcher.updateTimeZone(participantId, tz);
-                        }
+                for (String protocol : protocols) {
+                    MachineInstance machine = Launcher.machineRegistry.byParticipantAndProtocol(participantId, protocol);
+                    if (machine != null) {
+                        machine.updateTimezone(tz);
                     }
                 }
 
-                Map<String,String> response = new HashMap<>();
+                Map<String, String> response = new HashMap<>();
                 response.put("status", "ok");
                 responseString = gson.toJson(response);
-
             } else {
                 Map<String, String> response = new HashMap<>();
                 response.put("status", "error");
@@ -411,16 +341,123 @@ public class API {
                 responseString = gson.toJson(response);
             }
         } catch (Exception ex) {
-            StringWriter sw = new StringWriter();
-            ex.printStackTrace(new PrintWriter(sw));
-            String exceptionAsString = sw.toString();
-            ex.printStackTrace();
-            logger.error("updateTimeZone");
-            logger.error(exceptionAsString);
-
-            return Response.status(500).entity(exceptionAsString).build();
+            return serverError(ex, "updateTimeZone");
         }
         return Response.ok(responseString).header("Access-Control-Allow-Origin", "*").build();
+    }
+
+    @POST
+    @Path("/definitions/validate")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response validateDefinition(String body) {
+        try {
+            ProtocolDefinitionParser parser = new ProtocolDefinitionParser();
+            ProtocolDefinitionParser.ParseResult result = parser.parse(body);
+
+            JsonObject response = new JsonObject();
+            response.addProperty("ok", result.validation.isOk());
+            JsonArray errors = new JsonArray();
+            for (String error : result.validation.getErrors()) {
+                errors.add(error);
+            }
+            response.add("errors", errors);
+            return Response.ok(response.toString()).build();
+        } catch (Exception ex) {
+            return serverError(ex, "validateDefinition");
+        }
+    }
+
+    @POST
+    @Path("/simulate")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response simulate(String body) {
+        try {
+            JsonObject root = JsonParser.parseString(body).getAsJsonObject();
+            ProtocolDefinitionParser parser = new ProtocolDefinitionParser();
+            ProtocolDefinitionParser.ParseResult result = parser.parse(root.getAsJsonObject("definition"));
+            if (!result.validation.isOk()) {
+                JsonObject response = new JsonObject();
+                response.addProperty("ok", false);
+                JsonArray errors = new JsonArray();
+                for (String error : result.validation.getErrors()) {
+                    errors.add(error);
+                }
+                response.add("errors", errors);
+                return Response.ok(response.toString()).build();
+            }
+
+            String timezone = root.has("timezone") ? root.get("timezone").getAsString() : "America/New_York";
+            String startLocalTime = root.has("startTime") ? root.get("startTime").getAsString() : "2026-01-05T08:00:00";
+            JsonArray script = root.has("script") ? root.getAsJsonArray("script") : new JsonArray();
+
+            JsonObject simulation = Simulation.run(result.definition, timezone, startLocalTime, script);
+            simulation.addProperty("ok", true);
+            return Response.ok(simulation.toString()).build();
+        } catch (Exception ex) {
+            return serverError(ex, "simulate");
+        }
+    }
+
+    @GET
+    @Path("/machines/{study}")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response listMachines(@PathParam("study") String study) {
+        try {
+            JsonArray machines = new JsonArray();
+            for (MachineInstance machine : Launcher.machineRegistry.byStudyName(study)) {
+                JsonObject o = new JsonObject();
+                o.addProperty("enrollment_uuid", machine.getEnrollmentUuid());
+                o.addProperty("participant_uuid", machine.getParticipantUuid());
+                o.addProperty("protocol", machine.getProtocolName());
+                o.addProperty("version", machine.getProtocolVersion());
+                o.addProperty("state", machine.getCurrentState());
+                machines.add(o);
+            }
+            JsonObject response = new JsonObject();
+            response.addProperty("status", "ok");
+            response.add("machines", machines);
+            return Response.ok(response.toString()).build();
+        } catch (Exception ex) {
+            return serverError(ex, "listMachines");
+        }
+    }
+
+    private boolean validTwilioSignature(MultivaluedMap<String, String> formParams, String path) {
+        Boolean validate = Launcher.config.getBooleanParam("twilio_validate_webhook", true);
+        Boolean messagingDisabled = Launcher.config.getBooleanParam("disable_messaging", false);
+        if (!validate || messagingDisabled) {
+            return true;
+        }
+        try {
+            String signature = request.get().getHeader("X-Twilio-Signature");
+            if (signature == null) {
+                return false;
+            }
+            String url = Launcher.config.getStringParam("public_base_url", "") + path;
+            Map<String, String> params = convertMultiToRegularMap(formParams);
+            RequestValidator validator = new RequestValidator(Launcher.config.getStringParam("twilio_auth_token", ""));
+            return validator.validate(url, params, signature);
+        } catch (Exception ex) {
+            logger.error("Twilio signature validation failed", ex);
+            return false;
+        }
+    }
+
+    private Response serverError(Exception ex, String context) {
+        StringWriter sw = new StringWriter();
+        ex.printStackTrace(new PrintWriter(sw));
+        String exceptionAsString = sw.toString();
+        ex.printStackTrace();
+        logger.error(context);
+        logger.error(exceptionAsString);
+        return Response.status(500).entity(exceptionAsString).build();
+    }
+
+    private String first(MultivaluedMap<String, String> map, String key) {
+        List<String> values = map.get(key);
+        return values == null || values.isEmpty() ? null : values.get(0);
     }
 
     private Map<String, String> convertMultiToRegularMap(MultivaluedMap<String, String> m) {

@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "name": "SleepSurvey",
+  "initialState": "initial",
+  "timers": ["deadlineNoon", "deadline8pm"],
+  "settings": {
+    "endProtocolEvent": "receivedEndProtocol",
+    "collection": "link"
+  },
+  "restore": {
+    "policy": "recompute-from-clock",
+    "terminalStates": ["endSurveyProtocol"],
+    "recomputeRules": [
+      {"if": {"type": "beforeClock", "hour": 12, "minute": 0}, "fire": "isBeforeNoon"},
+      {"if": {"type": "beforeClock", "hour": 20, "minute": 0}, "fire": "isBefore8pm"},
+      {"if": {"type": "always"}, "fire": "isBeforeNoon"}
+    ],
+    "resetFire": "recomputeRules"
+  },
+  "eventMappings": {
+    "sms": {"defaultAction": "ignore"}
+  },
+  "states": {
+    "initial": {
+      "transitions": [
+        {"event": "isBeforeNoon", "to": "waitForNoon"},
+        {"event": "isBefore8pm", "to": "waitFor8pm"},
+        {"event": "receivedEndProtocol", "to": "endSurveyProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "waitFor8pm", "via": "isBefore8pm"},
+        {"to": "waitForNoon", "via": "isBeforeNoon"},
+        {"to": "endSurveyProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "waitForNoon": {
+      "entry": [
+        {"type": "setTimer", "timer": "deadlineNoon", "deadline": {"type": "secondsToClock", "hour": 12, "minute": 0, "ifPastAddDay": true}}
+      ],
+      "transitions": [
+        {"after": "deadlineNoon", "to": "noonSurvey"},
+        {"event": "receivedEndProtocol", "to": "endSurveyProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "noonSurvey", "via": "timeout:deadlineNoon"},
+        {"to": "endSurveyProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "noonSurvey": {
+      "entry": [
+        {"type": "generateSurveyToken", "surveyKey": "noonSurvey"},
+        {"type": "sendSurveyLink", "template": "Hello! Please take a moment to complete the following survey: {survey_link}"}
+      ],
+      "transitions": [{"auto": true, "to": "waitFor8pm"}],
+      "manualMoves": []
+    },
+    "waitFor8pm": {
+      "entry": [
+        {"type": "setTimer", "timer": "deadline8pm", "deadline": {"type": "secondsToClock", "hour": 20, "minute": 0, "ifPastAddDay": true}}
+      ],
+      "transitions": [
+        {"after": "deadline8pm", "to": "survey8pm"},
+        {"event": "receivedEndProtocol", "to": "endSurveyProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "survey8pm", "via": "timeout:deadline8pm"},
+        {"to": "endSurveyProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "survey8pm": {
+      "entry": [
+        {"type": "generateSurveyToken", "surveyKey": "eightPmSurvey"},
+        {"type": "sendSurveyLink", "template": "Good Evening! Please take a moment to complete the following survey: {survey_link}"}
+      ],
+      "transitions": [{"auto": true, "to": "waitForNoon"}],
+      "manualMoves": []
+    },
+    "endSurveyProtocol": {
+      "terminal": true,
+      "transitions": [],
+      "manualMoves": []
+    }
+  },
+  "surveys": [
+    {
+      "key": "noonSurvey",
+      "title": "Survey",
+      "questions": [
+        {"id": "notesLastNight", "type": "textarea", "label": "Do you have any other notes from last night? You can also tell us about anything else you may not have already told us about yesterday?", "required": false},
+        {"id": "work-free", "type": "radio", "label": "Is today a work or free day?", "options": ["work", "free"], "required": false}
+      ]
+    },
+    {
+      "key": "eightPmSurvey",
+      "title": "Survey",
+      "questions": [
+        {"id": "notesLastNight", "type": "textarea", "label": "Do you have any notes from today? Anything unusual from today?", "required": false},
+        {"id": "activityMonitorOff", "type": "radio", "label": "Did you take off your activity monitor today?", "options": ["Yes", "No"], "required": false},
+        {"id": "activityMonitorTime", "type": "textarea", "label": "Please tell us when you took off your activity monitor today if you haven’t told us already.", "required": false},
+        {"id": "activityMonitorOffDurationHours", "type": "number", "label": "How long did you have your activity monitor off? (Hours)", "required": false},
+        {"id": "activityMonitorOffDurationMins", "type": "number", "label": "How long did you have your activity monitor off? (Minutes)", "required": false},
+        {"id": "nap", "type": "radio", "label": "Did you take a nap today?", "options": ["Yes", "No"], "required": false},
+        {"id": "napTime", "type": "textarea", "label": "If you took a nap today and have not yet recorded it, please let us know when you napped.", "required": false},
+        {"id": "napDurationHours", "type": "number", "label": "How long did you take a nap? (Hours)", "required": false},
+        {"id": "napDurationMins", "type": "number", "label": "How long did you take a nap? (Minutes)", "required": false}
+      ]
+    }
+  ]
+}

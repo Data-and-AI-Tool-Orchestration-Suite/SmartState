@@ -1,6 +1,4 @@
-FROM postgres:16.5-alpine
-RUN apk add --no-cache sed
-
-COPY init.sql /init.sql
-ARG ADMIN_EPPN
-RUN sed "s/<ADMIN_EPPN>/$ADMIN_EPPN/g" "/init.sql" > "/docker-entrypoint-initdb.d/init.sql"
+FROM postgres:18-alpine
+COPY init.sql /opt/smartstate/init.sql.template
+COPY 001-init.sh /docker-entrypoint-initdb.d/001-init.sh
+COPY migrations/ /opt/smartstate/migrations/

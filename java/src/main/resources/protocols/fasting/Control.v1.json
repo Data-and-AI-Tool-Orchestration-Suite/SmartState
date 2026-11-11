@@ -1,0 +1,253 @@
+{
+  "schemaVersion": 1,
+  "name": "Control",
+  "initialState": "initial",
+  "timers": ["startWarnDeadline", "endWarnDeadline", "timeout24Hours", "timeout8pm"],
+  "settings": {
+    "endProtocolEvent": "receivedEndProtocol",
+    "collection": "none"
+  },
+  "restore": {
+    "policy": "same-day-else-reset",
+    "terminalStates": ["endProtocol"],
+    "fallbackState": "waitStart",
+    "noSaveStateEvent": "receivedWaitStart",
+    "dayBoundaryHour": 4,
+    "dayBoundaryMinute": 5,
+    "replay": {
+      "waitStart": {"restoring": ["receivedWaitStart"]},
+      "warnStartCal": {"restoring": ["receivedWarnStart"]},
+      "startcal": {"restoring": ["receivedStartCal"]},
+      "warnEndCal": {"restoring": ["receivedWarnEndCal"]},
+      "endcal": {"restoring": ["receivedStartCal", "receivedEndCal"]}
+    },
+    "resetFire": "receivedWaitStart"
+  },
+  "eventMappings": {
+    "sms": {
+      "defaultAction": "ignore",
+      "ignoreKeywords": ["snack"],
+      "fallbackReply": "Your text was not understood. Please send \"STARTCAL\" when you begin calories for the day; \"ENDCAL\" when you are done with calories for the day.",
+      "rules": [
+        {
+          "keywords": ["endcal", "stopcal"],
+          "inStates": ["waitStart", "warnStartCal"],
+          "condition": {"type": "fieldWasYesterday", "field": "start_cal_time", "boundaryHour": 4, "boundaryMinute": 0},
+          "notifyAdmins": "[{study} Control] A participant sent ENDCAL after 4am and before STARTCAL.",
+          "flagLastMessage": "isAfter8pm"
+        },
+        {
+          "keywords": ["endcal", "stopcal"],
+          "inStates": ["waitStart", "warnStartCal"],
+          "reply": "No STARTCAL received yet today. Please send us your \"STARTCAL\" so we know when your calories began today."
+        },
+        {
+          "keywords": ["startcal"],
+          "inStates": ["waitStart", "warnStartCal", "startcal"],
+          "parseTime": true,
+          "saveAs": "start_cal_time",
+          "maxBareLength": 8,
+          "fire": "receivedStartCal",
+          "parseErrorReply": "Your STARTCAL time was not understood. Please send \"STARTCAL\" again with your starting time. For example, \"STARTCAL 7:30 am\"."
+        },
+        {
+          "keywords": ["endcal", "stopcal"],
+          "inStates": ["startcal", "warnEndCal", "endcal"],
+          "parseTime": true,
+          "saveAs": "end_cal_time",
+          "maxBareLength": 7,
+          "fire": "receivedEndCal",
+          "parseErrorReply": "Your ENDCAL time was not understood. Please send \"ENDCAL\" again with your ending time. For example, \"ENDCAL 7:30 pm\"."
+        },
+        {
+          "keywords": ["startcal"],
+          "inStates": ["warnEndCal", "endcal"],
+          "reply": "Your text was not understood. Text {admin_phone} if you need help."
+        }
+      ]
+    }
+  },
+  "states": {
+    "initial": {
+      "transitions": [
+        {"event": "receivedWaitStart", "to": "waitStart"},
+        {"event": "receivedWarnStart", "to": "warnStartCal"},
+        {"event": "receivedStartCal", "to": "startcal"},
+        {"event": "receivedWarnEndCal", "to": "warnEndCal"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "waitStart", "via": "receivedWaitStart"},
+        {"to": "warnStartCal", "via": "receivedWarnStart"},
+        {"to": "startcal", "via": "receivedStartCal"},
+        {"to": "warnEndCal", "via": "receivedWarnEndCal"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "waitStart": {
+      "entry": [
+        {"type": "clearVars", "keys": ["sentMissedEndCal"]},
+        {
+          "type": "setTimer",
+          "timer": "startWarnDeadline",
+          "deadline": {
+            "type": "secondsToClock",
+            "hour": 11,
+            "minute": 59,
+            "second": 30,
+            "ifPastAddDay": false,
+            "addDayIf": {"type": "afterClock", "hour": 16, "minute": 45},
+            "minSeconds": 300
+          }
+        }
+      ],
+      "transitions": [
+        {"event": "receivedStartCal", "to": "startcal"},
+        {"after": "startWarnDeadline", "to": "warnStartCal"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "warnStartCal", "via": "timeout:startWarnDeadline"},
+        {"to": "startcal", "via": "receivedStartCal", "timeField": "start_cal_time"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "warnStartCal": {
+      "entry": [
+        {
+          "type": "setTimer",
+          "timer": "timeout8pm",
+          "deadline": {"type": "secondsToClock", "hour": 20, "minute": 0, "ifPastAddDay": true}
+        },
+        {
+          "type": "setTimer",
+          "timer": "timeout24Hours",
+          "deadline": {"type": "secondsToClock", "hour": 3, "minute": 59, "second": 30, "ifPastAddDay": true}
+        },
+        {"type": "sendSms", "template": "Remember to text \"STARTCAL\" when your calories start for the day and \"ENDCAL\" when your calories finish at night. Thank you!"}
+      ],
+      "transitions": [
+        {"event": "receivedStartCal", "to": "startcal"},
+        {"after": "timeout8pm", "to": "warnStartCal"},
+        {"after": "timeout24Hours", "to": "timeout24"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "timeout24", "via": "timeout:timeout24Hours"},
+        {"to": "warnStartCal", "via": "timeout:timeout8pm"},
+        {"to": "startcal", "via": "receivedStartCal", "timeField": "start_cal_time"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "startcal": {
+      "entry": [
+        {
+          "type": "setTimer",
+          "timer": "endWarnDeadline",
+          "deadline": {"type": "secondsToClock", "hour": 20, "minute": 59, "second": 30, "ifPastAddDay": false, "minSeconds": 300}
+        }
+      ],
+      "transitions": [
+        {"event": "receivedStartCal", "to": "startcal"},
+        {"event": "receivedEndCal", "to": "endcal"},
+        {"after": "endWarnDeadline", "to": "warnEndCal"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "startcal", "via": "receivedStartCal", "timeField": "start_cal_time"},
+        {"to": "endcal", "via": "receivedEndCal", "timeField": "end_cal_time"},
+        {"to": "warnEndCal", "via": "timeout:endWarnDeadline"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "warnEndCal": {
+      "entry": [
+        {
+          "type": "setTimer",
+          "timer": "timeout24Hours",
+          "deadline": {"type": "secondsToClock", "hour": 3, "minute": 59, "second": 30, "ifPastAddDay": true}
+        },
+        {"type": "sendSms", "template": "Remember to enter your \"ENDCAL\" tonight after your last calories. Thank you!"}
+      ],
+      "transitions": [
+        {"event": "receivedEndCal", "to": "endcal"},
+        {"after": "timeout24Hours", "to": "missedEndCal"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "missedEndCal", "via": "timeout:timeout24Hours"},
+        {"to": "endcal", "via": "receivedEndCal"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "missedEndCal": {
+      "entry": [
+        {
+          "type": "notifyAdmins",
+          "template": "[{study} Control] A participant missed their ENDCAL.",
+          "deliverAt": {"hour": 8, "minute": 0, "timezone": "admin"},
+          "suppressOnRestore": true
+        },
+        {"type": "setVar", "key": "sentMissedEndCal", "value": "true"},
+        {
+          "type": "sendSms",
+          "template": "We haven't heard from you in a while. Remember to text \"STARTCAL\" when your calories start in the morning and \"ENDCAL\" when your calories finish at night! Let us know if you need help.",
+          "deliverAt": {"hour": 8, "minute": 0, "timezone": "participant"}
+        },
+        {
+          "type": "notifyAdmins",
+          "template": "[{study} Control] A participant did not send STARTCAL or ENDCAL yesterday.",
+          "deliverAt": {"hour": 8, "minute": 0, "timezone": "admin"},
+          "suppressOnRestore": true,
+          "suppressIf": {"type": "varEquals", "key": "sentMissedEndCal", "value": "true"}
+        }
+      ],
+      "transitions": [{"auto": true, "to": "waitStart"}],
+      "manualMoves": []
+    },
+    "endcal": {
+      "entry": [
+        {
+          "type": "setTimer",
+          "timer": "timeout24Hours",
+          "deadline": {"type": "secondsToClock", "hour": 3, "minute": 59, "second": 30, "ifPastAddDay": true}
+        }
+      ],
+      "transitions": [
+        {"event": "receivedEndCal", "to": "endcal"},
+        {"after": "timeout24Hours", "to": "waitStart"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "endcal", "via": "receivedEndCal", "timeField": "end_cal_time"},
+        {"to": "waitStart", "via": "timeout:timeout24Hours"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "timeout24": {
+      "entry": [
+        {
+          "type": "sendSms",
+          "template": "We haven't heard from you in a while. Remember to text \"STARTCAL\" when your calories start in the morning and \"ENDCAL\" when your calories finish at night! Let us know if you need help.",
+          "deliverAt": {"hour": 8, "minute": 0, "timezone": "participant"}
+        },
+        {
+          "type": "notifyAdmins",
+          "template": "[{study} Control] A participant did not send STARTCAL or ENDCAL yesterday.",
+          "deliverAt": {"hour": 8, "minute": 0, "timezone": "admin"},
+          "suppressOnRestore": true,
+          "suppressIf": {"type": "varEquals", "key": "sentMissedEndCal", "value": "true"}
+        }
+      ],
+      "transitions": [{"auto": true, "to": "waitStart"}],
+      "manualMoves": [
+        {"to": "waitStart", "via": "auto"}
+      ]
+    },
+    "endProtocol": {
+      "terminal": true,
+      "transitions": [],
+      "manualMoves": []
+    }
+  }
+}

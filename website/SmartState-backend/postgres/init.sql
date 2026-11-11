@@ -1,12 +1,15 @@
 BEGIN;
 
--- Create user roles table
+CREATE TABLE IF NOT EXISTS schema_migrations(
+    filename VARCHAR(255) NOT NULL PRIMARY KEY,
+    applied_at TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+);
+
 CREATE TABLE IF NOT EXISTS user_roles(
     role_id INT NOT NULL PRIMARY KEY,
     role_name VARCHAR(255) NOT NULL
 );
 
--- Create users for CiLogon table
 CREATE TABLE IF NOT EXISTS users(
     id VARCHAR(255) NOT NULL PRIMARY KEY,
     email VARCHAR(255),
@@ -19,148 +22,590 @@ CREATE TABLE IF NOT EXISTS users(
     idp VARCHAR(255),
     idp_name VARCHAR(255),
     affiliation VARCHAR(255),
-    roles INT[] DEFAULT ARRAY[0]
+    is_super_admin BOOLEAN NOT NULL DEFAULT FALSE
 );
 
-
--- Create user_sessions table
 CREATE TABLE IF NOT EXISTS user_sessions(
     session_id VARCHAR(36) NOT NULL PRIMARY KEY,
     user_id VARCHAR(255) NOT NULL,
     expires TIMESTAMP NOT NULL,
     token JSONB NOT NULL,
+    current_study UUID,
     CONSTRAINT user_sessions_users_id_fk FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
--- Create the protocol_types table
-CREATE TABLE IF NOT EXISTS protocol_types (
-    protocol_type_uuid UUID NOT NULL PRIMARY KEY,
-    study VARCHAR(255) NOT NULL,
-    name VARCHAR(255) NOT NULL UNIQUE
+CREATE TABLE IF NOT EXISTS studies(
+    study_uuid UUID NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL UNIQUE,
+    contact_phone VARCHAR(32),
+    contact_email VARCHAR(255),
+    settings JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
 );
 
--- Create the participants table
-CREATE TABLE IF NOT EXISTS participants (
+CREATE TABLE IF NOT EXISTS user_study_roles(
+    user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    study_uuid UUID NOT NULL REFERENCES studies(study_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
+    role_id INT NOT NULL REFERENCES user_roles(role_id),
+    PRIMARY KEY (user_id, study_uuid)
+);
+
+CREATE TABLE IF NOT EXISTS protocol_definitions(
+    definition_uuid UUID NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
+    study_uuid UUID NOT NULL REFERENCES studies(study_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    version INT NOT NULL DEFAULT 1,
+    status VARCHAR(16) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','archived')),
+    definition JSONB NOT NULL,
+    created_by VARCHAR(255) REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+    updated_at TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+    published_at TIMESTAMP,
+    UNIQUE (study_uuid, name, version)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS protocol_definitions_one_draft
+    ON protocol_definitions(study_uuid, name) WHERE status = 'draft';
+
+CREATE TABLE IF NOT EXISTS participants(
     participant_uuid UUID NOT NULL PRIMARY KEY,
-    study VARCHAR(255) NOT NULL,
-    participant_json JSONB NOT NULL
+    study_uuid UUID NOT NULL REFERENCES studies(study_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
+    participant_json JSONB NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
 );
+CREATE INDEX IF NOT EXISTS participants_study_idx ON participants(study_uuid);
+CREATE INDEX IF NOT EXISTS participants_number_idx ON participants((participant_json->>'number'));
 
--- Create the enrollments table
-CREATE TABLE IF NOT EXISTS enrollments (
-    enrollment_uuid UUID NOT NULL PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS enrollments(
+    enrollment_uuid UUID NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
     participant_uuid UUID NOT NULL REFERENCES participants(participant_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
-    protocol_type_uuid UUID NOT NULL REFERENCES protocol_types(protocol_type_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
-    status BOOLEAN NOT NULL
+    definition_uuid UUID NOT NULL REFERENCES protocol_definitions(definition_uuid) ON UPDATE CASCADE,
+    study_uuid UUID NOT NULL REFERENCES studies(study_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
+    protocol_name VARCHAR(255) NOT NULL,
+    enrolled_at TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+    ended_at TIMESTAMP,
+    end_reason VARCHAR(64)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS enrollments_active_unique
+    ON enrollments(participant_uuid, protocol_name) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS enrollments_study_idx ON enrollments(study_uuid);
 
--- Create the messages table
-CREATE TABLE IF NOT EXISTS messages (
+CREATE TABLE IF NOT EXISTS messages(
     message_uuid UUID NOT NULL PRIMARY KEY,
     participant_uuid UUID NOT NULL REFERENCES participants(participant_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
-    TS TIMESTAMP NOT NULL,
-    message_direction CHAR(8) NOT NULL, /* incoming or outgoing */
-    message_json JSONB NOT NULL,
-    study VARCHAR(255) NOT NULL
+    study_uuid UUID NOT NULL REFERENCES studies(study_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
+    ts TIMESTAMP NOT NULL,
+    message_direction CHAR(8) NOT NULL,
+    message_json JSONB NOT NULL
 );
+CREATE INDEX IF NOT EXISTS messages_study_ts_idx ON messages(study_uuid, ts DESC);
+CREATE INDEX IF NOT EXISTS messages_participant_ts_idx ON messages(participant_uuid, ts DESC);
 
--- Create the queued_messages table
-CREATE TABLE IF NOT EXISTS queued_messages (
+CREATE TABLE IF NOT EXISTS queued_messages(
     message_uuid UUID NOT NULL PRIMARY KEY,
     participant_uuid UUID NOT NULL REFERENCES participants(participant_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
+    study_uuid UUID NOT NULL REFERENCES studies(study_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
     toNumber CHAR(12) NOT NULL,
     fromNumber CHAR(12) NOT NULL,
     scheduledFor TIMESTAMP NOT NULL,
-    message_json JSONB NOT NULL,
-    study VARCHAR(255) NOT NULL
+    message_json JSONB NOT NULL
 );
 
-
--- Create the save_state table
-CREATE TABLE IF NOT EXISTS save_state (
+CREATE TABLE IF NOT EXISTS save_state(
     enrollment_uuid UUID NOT NULL REFERENCES enrollments(enrollment_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
-    TS TIMESTAMP NOT NULL,
+    study_uuid UUID NOT NULL REFERENCES studies(study_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
+    ts TIMESTAMP NOT NULL,
     state_json JSONB NOT NULL
 );
+CREATE INDEX IF NOT EXISTS save_state_enrollment_ts_idx ON save_state(enrollment_uuid, ts DESC);
 
--- Create the state_log table
-CREATE TABLE IF NOT EXISTS state_log (
-    participant_uuid UUID NOT NULL,
-    TS TIMESTAMP NOT NULL,
+CREATE TABLE IF NOT EXISTS state_log(
+    participant_uuid UUID NOT NULL REFERENCES participants(participant_uuid) ON DELETE CASCADE,
+    enrollment_uuid UUID REFERENCES enrollments(enrollment_uuid) ON DELETE SET NULL,
+    study_uuid UUID NOT NULL REFERENCES studies(study_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
+    ts TIMESTAMP NOT NULL,
     log_json JSONB NOT NULL
 );
+CREATE INDEX IF NOT EXISTS state_log_participant_ts_idx ON state_log(participant_uuid, ts DESC);
+CREATE INDEX IF NOT EXISTS state_log_study_ts_idx ON state_log(study_uuid, ts DESC);
 
--- Create the surveys table
-CREATE TABLE IF NOT EXISTS surveys (
-    token UUID NOT NULL,
-    participant_uuid UUID NOT NULL,
+CREATE TABLE IF NOT EXISTS surveys(
+    token UUID NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
+    participant_uuid UUID NOT NULL REFERENCES participants(participant_uuid) ON DELETE CASCADE,
+    study_uuid UUID NOT NULL REFERENCES studies(study_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
+    enrollment_uuid UUID REFERENCES enrollments(enrollment_uuid) ON DELETE SET NULL,
+    survey_key VARCHAR(255),
+    questions_json JSONB,
     created_at TIMESTAMP NOT NULL,
     finished_at TIMESTAMP,
     survey_json JSONB
 );
 
--- Create the time_zones table
-CREATE TABLE IF NOT EXISTS time_zones (
+CREATE TABLE IF NOT EXISTS time_zones(
     time_zone VARCHAR(64) NOT NULL,
     short_zone VARCHAR(32) NOT NULL,
     UNIQUE (time_zone, short_zone)
 );
 
--- Create the metrics table
-CREATE TABLE IF NOT EXISTS metrics (
-    metric_id UUID PRIMARY KEY,
-    participant_id UUID,
+CREATE TABLE IF NOT EXISTS metrics(
+    metric_id UUID NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
+    participant_id UUID REFERENCES participants(participant_uuid),
+    study_uuid UUID NOT NULL REFERENCES studies(study_uuid) ON UPDATE CASCADE ON DELETE CASCADE,
     ts TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
-    metric_json jsonb NOT NULL,
-    FOREIGN KEY (participant_id) REFERENCES participants(participant_uuid)
+    metric_json JSONB NOT NULL
 );
 
 COMMIT;
 
+BEGIN;
+
+CREATE ROLE smartstate_app LOGIN PASSWORD '<APP_DB_PASSWORD>';
+CREATE ROLE smartstate_engine LOGIN PASSWORD '<ENGINE_DB_PASSWORD>' BYPASSRLS;
+
+GRANT USAGE ON SCHEMA public TO smartstate_app, smartstate_engine;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+    user_roles, users, user_sessions, studies, user_study_roles,
+    protocol_definitions, participants, enrollments, messages, queued_messages,
+    save_state, state_log, surveys, time_zones, metrics
+TO smartstate_app;
+
+GRANT SELECT ON studies, participants, enrollments, protocol_definitions TO smartstate_engine;
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+    messages, queued_messages, save_state, state_log, surveys, metrics
+TO smartstate_engine;
+
+CREATE FUNCTION app_user_id() RETURNS TEXT LANGUAGE sql STABLE
+    AS $$ SELECT current_setting('app.user_id', true) $$;
+
+CREATE FUNCTION app_is_super_admin() RETURNS BOOLEAN LANGUAGE sql STABLE
+    AS $$ SELECT COALESCE(NULLIF(current_setting('app.is_super_admin', true), ''), 'false')::boolean $$;
+
+CREATE FUNCTION app_has_study(sid UUID) RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER
+    AS $$ SELECT app_is_super_admin() OR EXISTS
+        (SELECT 1 FROM user_study_roles r WHERE r.user_id = app_user_id() AND r.study_uuid = sid) $$;
+
+CREATE FUNCTION app_is_study_admin(sid UUID) RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER
+    AS $$ SELECT app_is_super_admin() OR EXISTS
+        (SELECT 1 FROM user_study_roles r
+         JOIN user_roles ur ON ur.role_id = r.role_id
+         WHERE r.user_id = app_user_id() AND r.study_uuid = sid AND ur.role_name = 'Study Admin') $$;
+
+GRANT EXECUTE ON FUNCTION app_user_id(), app_is_super_admin(), app_has_study(UUID), app_is_study_admin(UUID) TO smartstate_app;
+
+ALTER TABLE studies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE studies FORCE ROW LEVEL SECURITY;
+CREATE POLICY studies_member_select ON studies FOR SELECT TO smartstate_app
+    USING (app_has_study(study_uuid));
+CREATE POLICY studies_super_admin_insert ON studies FOR INSERT TO smartstate_app
+    WITH CHECK (app_is_super_admin());
+CREATE POLICY studies_super_admin_update ON studies FOR UPDATE TO smartstate_app
+    USING (app_is_super_admin()) WITH CHECK (app_is_super_admin());
+CREATE POLICY studies_super_admin_delete ON studies FOR DELETE TO smartstate_app
+    USING (app_is_super_admin());
+CREATE POLICY studies_token_select ON studies FOR SELECT TO smartstate_app
+    USING (EXISTS (SELECT 1 FROM surveys s WHERE s.study_uuid = studies.study_uuid
+        AND s.token::text = current_setting('app.survey_token', true)));
+
+ALTER TABLE user_study_roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_study_roles FORCE ROW LEVEL SECURITY;
+CREATE POLICY user_study_roles_member_select ON user_study_roles FOR SELECT TO smartstate_app
+    USING (app_has_study(study_uuid) OR user_id = app_user_id());
+CREATE POLICY user_study_roles_admin_insert ON user_study_roles FOR INSERT TO smartstate_app
+    WITH CHECK (app_is_study_admin(study_uuid));
+CREATE POLICY user_study_roles_admin_update ON user_study_roles FOR UPDATE TO smartstate_app
+    USING (app_is_study_admin(study_uuid)) WITH CHECK (app_is_study_admin(study_uuid));
+CREATE POLICY user_study_roles_admin_delete ON user_study_roles FOR DELETE TO smartstate_app
+    USING (app_is_study_admin(study_uuid));
+
+ALTER TABLE protocol_definitions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE protocol_definitions FORCE ROW LEVEL SECURITY;
+CREATE POLICY protocol_definitions_study_access ON protocol_definitions FOR ALL TO smartstate_app
+    USING (app_has_study(study_uuid)) WITH CHECK (app_has_study(study_uuid));
+
+ALTER TABLE participants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE participants FORCE ROW LEVEL SECURITY;
+CREATE POLICY participants_study_access ON participants FOR ALL TO smartstate_app
+    USING (app_has_study(study_uuid)) WITH CHECK (app_has_study(study_uuid));
+CREATE POLICY participants_token_select ON participants FOR SELECT TO smartstate_app
+    USING (EXISTS (SELECT 1 FROM surveys s WHERE s.participant_uuid = participants.participant_uuid
+        AND s.token::text = current_setting('app.survey_token', true)));
+
+ALTER TABLE enrollments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE enrollments FORCE ROW LEVEL SECURITY;
+CREATE POLICY enrollments_study_access ON enrollments FOR ALL TO smartstate_app
+    USING (app_has_study(study_uuid)) WITH CHECK (app_has_study(study_uuid));
+
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages FORCE ROW LEVEL SECURITY;
+CREATE POLICY messages_study_access ON messages FOR ALL TO smartstate_app
+    USING (app_has_study(study_uuid)) WITH CHECK (app_has_study(study_uuid));
+
+ALTER TABLE queued_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE queued_messages FORCE ROW LEVEL SECURITY;
+CREATE POLICY queued_messages_study_access ON queued_messages FOR ALL TO smartstate_app
+    USING (app_has_study(study_uuid)) WITH CHECK (app_has_study(study_uuid));
+
+ALTER TABLE save_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE save_state FORCE ROW LEVEL SECURITY;
+CREATE POLICY save_state_study_access ON save_state FOR ALL TO smartstate_app
+    USING (app_has_study(study_uuid)) WITH CHECK (app_has_study(study_uuid));
+
+ALTER TABLE state_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE state_log FORCE ROW LEVEL SECURITY;
+CREATE POLICY state_log_study_access ON state_log FOR ALL TO smartstate_app
+    USING (app_has_study(study_uuid)) WITH CHECK (app_has_study(study_uuid));
+
+ALTER TABLE surveys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE surveys FORCE ROW LEVEL SECURITY;
+CREATE POLICY surveys_study_access ON surveys FOR ALL TO smartstate_app
+    USING (app_has_study(study_uuid)) WITH CHECK (app_has_study(study_uuid));
+CREATE POLICY surveys_token_access ON surveys FOR ALL TO smartstate_app
+    USING (token::text = current_setting('app.survey_token', true))
+    WITH CHECK (token::text = current_setting('app.survey_token', true));
+
+ALTER TABLE metrics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE metrics FORCE ROW LEVEL SECURITY;
+CREATE POLICY metrics_study_access ON metrics FOR ALL TO smartstate_app
+    USING (app_has_study(study_uuid)) WITH CHECK (app_has_study(study_uuid));
+
+COMMIT;
 
 BEGIN;
 
 INSERT INTO user_roles (role_id, role_name) VALUES
     (0, 'Default'),
-    (1, 'Super Admin'), -- developers or maintainers of the site
-    (2, 'Study Admin'), -- PI or study coordinator
-    (3, 'User') -- Postdoc, intern, undergrad, etc.
+    (1, 'Super Admin'),
+    (2, 'Study Admin'),
+    (3, 'User'),
+    (4, 'PI'),
+    (5, 'Non-PHI')
 ON CONFLICT (role_id) DO NOTHING;
--- Add more roles here if necessary
 
--- Constraint for ensuring roles are valid
-CREATE OR REPLACE FUNCTION check_roles_validity() 
-RETURNS TRIGGER AS $$
-BEGIN
-    -- Check that every value in the roles array exists in user_roles
-    IF EXISTS (
-        SELECT 1 FROM unnest(NEW.roles) AS role_id 
-        WHERE role_id NOT IN (SELECT role_id FROM user_roles)
-    ) THEN
-        RAISE EXCEPTION 'Invalid role_id in roles array';
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+INSERT INTO schema_migrations (filename) VALUES
+    ('002_fasting_roles.sql')
+ON CONFLICT (filename) DO NOTHING;
 
-CREATE TRIGGER validate_roles
-BEFORE INSERT OR UPDATE ON users
-FOR EACH ROW EXECUTE FUNCTION check_roles_validity();
+INSERT INTO users (id, eppn, is_super_admin) VALUES
+    ('notloggedin_123456', '<ADMIN_EPPN>', TRUE);
+
+INSERT INTO studies (study_uuid, name, settings) VALUES
+    ('00000000-0000-0000-0000-000000000001', 'Default', '{}');
+
 COMMIT;
 
 BEGIN;
--- Insert the demo protocols
-INSERT INTO protocol_types (protocol_type_uuid, study, name) VALUES
-    ('00000000-0000-0000-0000-000000000001', 'Default', 'ReadGlucose'),
-    ('00000000-0000-0000-0000-000000000002', 'Default', 'Survey'),
-    ('00000000-0000-0000-0000-000000000003', 'Default', 'Inactive');
 
+INSERT INTO protocol_definitions (definition_uuid, study_uuid, name, version, status, definition, published_at) VALUES
+    ('00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-000000000001', 'ReadGlucose', 1, 'published', $readglucose_v1$
+{
+  "schemaVersion": 1,
+  "name": "ReadGlucose",
+  "initialState": "initial",
+  "timers": ["startDeadline", "startWarnDeadline", "endOfEpisodeDeadline"],
+  "settings": {
+    "endProtocolEvent": "receivedEndProtocol",
+    "help": {
+      "keywords": ["help"],
+      "adminTemplate": "ReadGlucose: A participant is in need of help!",
+      "participantReply": "We've notified study administrators that you need help. Someone will be contacting you soon."
+    },
+    "collection": "none",
+    "deviceWindow": {
+      "quietSeconds": 30,
+      "acceptStates": ["waitStart", "warnStartGlucose", "startReading"],
+      "startEvent": "receivedStartGlucose",
+      "endEvent": "receivedEndConnection",
+      "result": {
+        "type": "modulo",
+        "of": "count",
+        "mod": 3,
+        "map": {"0": "low", "2": "high"},
+        "default": "normal"
+      }
+    }
+  },
+  "restore": {
+    "policy": "same-day-else-reset",
+    "terminalStates": ["endReadGlucoseProtocol"],
+    "fallbackState": "waitStart",
+    "noSaveStateEvent": "receivedWaitStart",
+    "replay": {
+      "waitStart": {"restoring": ["receivedWaitStart"]},
+      "warnStartGlucose": {"restoring": ["receivedWarnStart"]},
+      "startReading": {"restoring": ["receivedStartGlucose"], "after": ["receivedError"]},
+      "endOfEpisode": {"restoring": ["receivedEndofEpisode"]}
+    },
+    "resetFire": "receivedWaitStart"
+  },
+  "eventMappings": {
+    "sms": {"defaultAction": "ignore"},
+    "message": {
+      "commandField": "Command",
+      "commands": [
+        {"equals": "startGlucose", "inStates": ["waitStart", "warnStartGlucose"], "fire": "receivedStartGlucose"},
+        {"equals": "endConnection", "inStates": ["startReading"], "fire": "receivedEndConnection"}
+      ],
+      "otherwise": [{"inStates": ["startReading"], "fire": "receivedError"}]
+    }
+  },
+  "states": {
+    "initial": {
+      "transitions": [
+        {"event": "receivedWaitStart", "to": "waitStart"},
+        {"event": "receivedWarnStart", "to": "warnStartGlucose"},
+        {"event": "receivedStartGlucose", "to": "startReading"},
+        {"event": "receivedEndofEpisode", "to": "endOfEpisode"},
+        {"event": "receivedEndProtocol", "to": "endReadGlucoseProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "waitStart", "via": "receivedWaitStart"},
+        {"to": "warnStartGlucose", "via": "receivedWarnStart"},
+        {"to": "endReadGlucoseProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "waitStart": {
+      "entry": [
+        {
+          "type": "setTimer",
+          "timer": "startDeadline",
+          "deadline": {
+            "type": "conditional",
+            "if": {"type": "timerWithinMinuteWindow", "timer": "startDeadline", "fromMinute": 0, "toMinute": 15},
+            "then": {"type": "secondsToNextMinuteMark", "mark": 15},
+            "else": {"type": "fixedSeconds", "seconds": 900}
+          }
+        },
+        {"type": "sendSms", "template": "Hi {first_name}, it's time to check you blood glucose level. Please interact with you blood glucose device to start sending readings."}
+      ],
+      "transitions": [
+        {"event": "receivedStartGlucose", "to": "startReading"},
+        {"after": "startDeadline", "to": "warnStartGlucose"},
+        {"event": "receivedEndProtocol", "to": "endReadGlucoseProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "warnStartGlucose", "via": "timeout:startDeadline"},
+        {"to": "startReading", "via": "receivedStartGlucose"},
+        {"to": "endReadGlucoseProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "warnStartGlucose": {
+      "entry": [
+        {
+          "type": "setTimer",
+          "timer": "startWarnDeadline",
+          "deadline": {
+            "type": "conditional",
+            "if": {"type": "timerWithinMinuteWindow", "timer": "startWarnDeadline", "fromMinute": 15, "toMinute": 30},
+            "then": {"type": "secondsToNextMinuteMark", "mark": 30},
+            "else": {"type": "fixedSeconds", "seconds": 900}
+          }
+        },
+        {"type": "sendSms", "template": "We haven't started receiving your glucose measurements yet. Please interact with you blood glucose device to start sending readings. If you need help, please respond with \"help me\"."}
+      ],
+      "transitions": [
+        {"event": "receivedStartGlucose", "to": "startReading"},
+        {"after": "startWarnDeadline", "to": "missedStart"},
+        {"event": "receivedEndProtocol", "to": "endReadGlucoseProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "startReading", "via": "receivedStartGlucose"},
+        {"to": "missedStart", "via": "timeout:startWarnDeadline"},
+        {"to": "endReadGlucoseProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "startReading": {
+      "entry": [
+        {"type": "sendSms", "template": "Your glucose readings are being received. We'll let you know your results momentarily."}
+      ],
+      "transitions": [
+        {"event": "receivedEndConnection", "to": "finishedReading"},
+        {"event": "receivedError", "to": "notifyAdmin"},
+        {"event": "receivedEndProtocol", "to": "endReadGlucoseProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "notifyAdmin", "via": "receivedError"},
+        {"to": "finishedReading", "via": "receivedEndConnection"},
+        {"to": "endReadGlucoseProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "missedStart": {
+      "entry": [
+        {"type": "sendSms", "template": "{first_name}, we haven't started receiving your glucose readings. We will notify an administrator to assist you."}
+      ],
+      "transitions": [{"auto": true, "to": "notifyAdmin"}],
+      "manualMoves": [{"to": "notifyAdmin", "via": "auto"}]
+    },
+    "notifyAdmin": {
+      "entry": [
+        {"type": "notifyAdmins", "template": "A participant did not successfully interact with their glucose measurement device within the 30 minute time window or an error occurred. They may require help."}
+      ],
+      "transitions": [{"auto": true, "to": "endOfEpisode"}],
+      "manualMoves": [{"to": "endOfEpisode", "via": "auto"}]
+    },
+    "finishedReading": {
+      "entry": [
+        {"type": "resetDeviceWindow"},
+        {
+          "type": "sendResultSms",
+          "source": "deviceResult",
+          "messages": {
+            "low": "All finished. Your blood glucose is low. Take steps to raise it.",
+            "high": "All finished. Your blood glucose is high. Take steps to lower it.",
+            "normal": "All finished. Your blood glucose is normal. Keep up the good work!"
+          }
+        }
+      ],
+      "transitions": [{"auto": true, "to": "endOfEpisode"}],
+      "manualMoves": [{"to": "endOfEpisode", "via": "auto"}]
+    },
+    "endOfEpisode": {
+      "entry": [
+        {"type": "setTimer", "timer": "endOfEpisodeDeadline", "deadline": {"type": "secondsToHourBoundaryPlus", "hours": 2}}
+      ],
+      "transitions": [
+        {"after": "endOfEpisodeDeadline", "to": "waitStart"},
+        {"event": "receivedEndProtocol", "to": "endReadGlucoseProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "waitStart", "via": "timeout:endOfEpisodeDeadline"},
+        {"to": "endReadGlucoseProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "endReadGlucoseProtocol": {
+      "terminal": true,
+      "transitions": [],
+      "manualMoves": []
+    }
+  }
+}
+$readglucose_v1$::jsonb, (NOW() AT TIME ZONE 'utc'));
 
--- Insert initial user into the database as an Admin. <ADMIN_EPPN> will be updated to the .env value 
--- when the container is built
-INSERT INTO users (id, eppn, roles) VALUES
-    ('notloggedin_123456', '<ADMIN_EPPN>', ARRAY[(SELECT role_id FROM user_roles WHERE role_name = 'Super Admin')]);
+INSERT INTO protocol_definitions (definition_uuid, study_uuid, name, version, status, definition, published_at) VALUES
+    ('00000000-0000-0000-0000-0000000000a2', '00000000-0000-0000-0000-000000000001', 'Survey', 1, 'published', $survey_v1$
+{
+  "schemaVersion": 1,
+  "name": "Survey",
+  "initialState": "initial",
+  "timers": ["deadlineNoon", "deadline6pm"],
+  "settings": {
+    "endProtocolEvent": "receivedEndProtocol",
+    "help": {
+      "keywords": ["help"],
+      "adminTemplate": "Survey: A participant is in need of help!",
+      "participantReply": "We've notified study administrators that you need help. Someone will be contacting you soon."
+    },
+    "collection": "llm"
+  },
+  "restore": {
+    "policy": "recompute-from-clock",
+    "terminalStates": ["endSurveyProtocol"],
+    "recomputeRules": [
+      {"if": {"type": "beforeClock", "hour": 12, "minute": 0}, "fire": "isBeforeNoon"},
+      {"if": {"type": "beforeClock", "hour": 18, "minute": 0}, "fire": "isBefore6pm"},
+      {"if": {"type": "always"}, "fire": "isBeforeNoon"}
+    ],
+    "resetFire": "recomputeRules"
+  },
+  "eventMappings": {
+    "sms": {"defaultAction": "llmAnswer", "inStates": ["noonSurvey", "survey6pm", "waitFor6pm", "waitForNoon"]}
+  },
+  "states": {
+    "initial": {
+      "transitions": [
+        {"event": "isBeforeNoon", "to": "waitForNoon"},
+        {"event": "isBefore6pm", "to": "waitFor6pm"},
+        {"event": "receivedEndProtocol", "to": "endSurveyProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "waitFor6pm", "via": "isBefore6pm"},
+        {"to": "waitForNoon", "via": "isBeforeNoon"},
+        {"to": "endSurveyProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "waitForNoon": {
+      "entry": [
+        {"type": "setTimer", "timer": "deadlineNoon", "deadline": {"type": "secondsToClock", "hour": 12, "minute": 0, "ifPastAddDay": true}}
+      ],
+      "transitions": [
+        {"after": "deadlineNoon", "to": "noonSurvey"},
+        {"event": "receivedEndProtocol", "to": "endSurveyProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "noonSurvey", "via": "timeout:deadlineNoon"},
+        {"to": "endSurveyProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "noonSurvey": {
+      "entry": [
+        {"type": "generateSurveyToken", "surveyKey": "health_habits"},
+        {
+          "type": "llmQuestion",
+          "question": "How often do you exercise per week?",
+          "systemPrompt": "You must determine if the user submits a valid response. The user will be answering the question: \"How often do you exercise per week?\". If you are able to fit the users response into one of the following categories, then the response is valid. The categories are: \"Never\", \"1-2 times\", \"3-4 times\", and \"5+ times\". You then must return the category that the fits the users response. For example, if the user responds with \"I exercise twice a week\", you would respond with \"1-2 times\". If you cannot determine which category fits the users response, list the categories and ask the question again.Respond only with one of the categories and no other text.",
+          "validCategories": ["never", "1-2 times", "3-4 times", "5+ times"],
+          "answerKey": "exercise",
+          "staticAnswers": {"diet": "Average", "smoke": "smoke-no", "sleep": "4-6 hours", "water": "1-2 liters", "comments": "N/a"},
+          "linkTemplate": "Hello! Please take a moment to complete the following survey about your health: {survey_link}"
+        }
+      ],
+      "transitions": [{"auto": true, "to": "waitFor6pm"}],
+      "manualMoves": []
+    },
+    "waitFor6pm": {
+      "entry": [
+        {"type": "setTimer", "timer": "deadline6pm", "deadline": {"type": "secondsToClock", "hour": 18, "minute": 0, "ifPastAddDay": false}}
+      ],
+      "transitions": [
+        {"after": "deadline6pm", "to": "survey6pm"},
+        {"event": "receivedEndProtocol", "to": "endSurveyProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "survey6pm", "via": "timeout:deadline6pm"},
+        {"to": "endSurveyProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "survey6pm": {
+      "entry": [
+        {"type": "generateSurveyToken", "surveyKey": "health_habits"},
+        {
+          "type": "llmQuestion",
+          "question": "How often do you exercise per week?",
+          "systemPrompt": "You must determine if the user submits a valid response. The user will be answering the question: \"How often do you exercise per week?\". If you are able to fit the users response into one of the following categories, then the response is valid. The categories are: \"Never\", \"1-2 times\", \"3-4 times\", and \"5+ times\". You then must return the category that the fits the users response. For example, if the user responds with \"I exercise twice a week\", you would respond with \"1-2 times\". If you cannot determine which category fits the users response, list the categories and ask the question again.Respond only with one of the categories and no other text.",
+          "validCategories": ["never", "1-2 times", "3-4 times", "5+ times"],
+          "answerKey": "exercise",
+          "staticAnswers": {"diet": "Average", "smoke": "smoke-no", "sleep": "4-6 hours", "water": "1-2 liters", "comments": "N/a"},
+          "linkTemplate": "Good Evening! Please take a moment to complete the following survey about your health: {survey_link}"
+        }
+      ],
+      "transitions": [{"auto": true, "to": "waitForNoon"}],
+      "manualMoves": []
+    },
+    "endSurveyProtocol": {
+      "terminal": true,
+      "transitions": [],
+      "manualMoves": []
+    }
+  },
+  "surveys": [
+    {
+      "key": "health_habits",
+      "title": "Health Habits Survey",
+      "questions": [
+        {"id": "exercise", "type": "select", "label": "How often do you exercise per week?", "options": ["Never", "1-2 times", "3-4 times", "5+ times"], "required": true},
+        {"id": "diet", "type": "select", "label": "How would you describe your diet?", "options": ["Poor", "Average", "Healthy", "Very Healthy"], "required": true},
+        {"id": "smoke", "type": "radio", "label": "Do you smoke?", "options": ["smoke-yes", "smoke-no"], "required": true},
+        {"id": "sleep", "type": "select", "label": "How many hours do you sleep per night?", "options": ["Less than 4 hours", "4-6 hours", "6-8 hours", "More than 8 hours"], "required": true},
+        {"id": "water", "type": "select", "label": "How much water do you drink per day?", "options": ["Less than 1 liter", "1-2 liters", "2-3 liters", "More than 3 liters"], "required": true},
+        {"id": "comments", "type": "textarea", "label": "Anything else you'd like to share?", "required": false}
+      ]
+    }
+  ]
+}
+$survey_v1$::jsonb, (NOW() AT TIME ZONE 'utc'));
 
+COMMIT;
+
+BEGIN;
 -- Insert timezones into time_zone table
 INSERT INTO time_zones (time_zone, short_zone)
 VALUES

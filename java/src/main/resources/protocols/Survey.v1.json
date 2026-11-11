@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "name": "Survey",
+  "initialState": "initial",
+  "timers": ["deadlineNoon", "deadline6pm"],
+  "settings": {
+    "endProtocolEvent": "receivedEndProtocol",
+    "help": {
+      "keywords": ["help"],
+      "adminTemplate": "Survey: A participant is in need of help!",
+      "participantReply": "We've notified study administrators that you need help. Someone will be contacting you soon."
+    },
+    "collection": "llm"
+  },
+  "restore": {
+    "policy": "recompute-from-clock",
+    "terminalStates": ["endSurveyProtocol"],
+    "recomputeRules": [
+      {"if": {"type": "beforeClock", "hour": 12, "minute": 0}, "fire": "isBeforeNoon"},
+      {"if": {"type": "beforeClock", "hour": 18, "minute": 0}, "fire": "isBefore6pm"},
+      {"if": {"type": "always"}, "fire": "isBeforeNoon"}
+    ],
+    "resetFire": "recomputeRules"
+  },
+  "eventMappings": {
+    "sms": {"defaultAction": "llmAnswer", "inStates": ["noonSurvey", "survey6pm", "waitFor6pm", "waitForNoon"]}
+  },
+  "states": {
+    "initial": {
+      "transitions": [
+        {"event": "isBeforeNoon", "to": "waitForNoon"},
+        {"event": "isBefore6pm", "to": "waitFor6pm"},
+        {"event": "receivedEndProtocol", "to": "endSurveyProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "waitFor6pm", "via": "isBefore6pm"},
+        {"to": "waitForNoon", "via": "isBeforeNoon"},
+        {"to": "endSurveyProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "waitForNoon": {
+      "entry": [
+        {"type": "setTimer", "timer": "deadlineNoon", "deadline": {"type": "secondsToClock", "hour": 12, "minute": 0, "ifPastAddDay": true}}
+      ],
+      "transitions": [
+        {"after": "deadlineNoon", "to": "noonSurvey"},
+        {"event": "receivedEndProtocol", "to": "endSurveyProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "noonSurvey", "via": "timeout:deadlineNoon"},
+        {"to": "endSurveyProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "noonSurvey": {
+      "entry": [
+        {"type": "generateSurveyToken", "surveyKey": "health_habits"},
+        {
+          "type": "llmQuestion",
+          "question": "How often do you exercise per week?",
+          "systemPrompt": "You must determine if the user submits a valid response. The user will be answering the question: \"How often do you exercise per week?\". If you are able to fit the users response into one of the following categories, then the response is valid. The categories are: \"Never\", \"1-2 times\", \"3-4 times\", and \"5+ times\". You then must return the category that the fits the users response. For example, if the user responds with \"I exercise twice a week\", you would respond with \"1-2 times\". If you cannot determine which category fits the users response, list the categories and ask the question again.Respond only with one of the categories and no other text.",
+          "validCategories": ["never", "1-2 times", "3-4 times", "5+ times"],
+          "answerKey": "exercise",
+          "staticAnswers": {"diet": "Average", "smoke": "smoke-no", "sleep": "4-6 hours", "water": "1-2 liters", "comments": "N/a"},
+          "linkTemplate": "Hello! Please take a moment to complete the following survey about your health: {survey_link}"
+        }
+      ],
+      "transitions": [{"auto": true, "to": "waitFor6pm"}],
+      "manualMoves": []
+    },
+    "waitFor6pm": {
+      "entry": [
+        {"type": "setTimer", "timer": "deadline6pm", "deadline": {"type": "secondsToClock", "hour": 18, "minute": 0, "ifPastAddDay": false}}
+      ],
+      "transitions": [
+        {"after": "deadline6pm", "to": "survey6pm"},
+        {"event": "receivedEndProtocol", "to": "endSurveyProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "survey6pm", "via": "timeout:deadline6pm"},
+        {"to": "endSurveyProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "survey6pm": {
+      "entry": [
+        {"type": "generateSurveyToken", "surveyKey": "health_habits"},
+        {
+          "type": "llmQuestion",
+          "question": "How often do you exercise per week?",
+          "systemPrompt": "You must determine if the user submits a valid response. The user will be answering the question: \"How often do you exercise per week?\". If you are able to fit the users response into one of the following categories, then the response is valid. The categories are: \"Never\", \"1-2 times\", \"3-4 times\", and \"5+ times\". You then must return the category that the fits the users response. For example, if the user responds with \"I exercise twice a week\", you would respond with \"1-2 times\". If you cannot determine which category fits the users response, list the categories and ask the question again.Respond only with one of the categories and no other text.",
+          "validCategories": ["never", "1-2 times", "3-4 times", "5+ times"],
+          "answerKey": "exercise",
+          "staticAnswers": {"diet": "Average", "smoke": "smoke-no", "sleep": "4-6 hours", "water": "1-2 liters", "comments": "N/a"},
+          "linkTemplate": "Good Evening! Please take a moment to complete the following survey about your health: {survey_link}"
+        }
+      ],
+      "transitions": [{"auto": true, "to": "waitForNoon"}],
+      "manualMoves": []
+    },
+    "endSurveyProtocol": {
+      "terminal": true,
+      "transitions": [],
+      "manualMoves": []
+    }
+  },
+  "surveys": [
+    {
+      "key": "health_habits",
+      "title": "Health Habits Survey",
+      "questions": [
+        {"id": "exercise", "type": "select", "label": "How often do you exercise per week?", "options": ["Never", "1-2 times", "3-4 times", "5+ times"], "required": true},
+        {"id": "diet", "type": "select", "label": "How would you describe your diet?", "options": ["Poor", "Average", "Healthy", "Very Healthy"], "required": true},
+        {"id": "smoke", "type": "radio", "label": "Do you smoke?", "options": ["smoke-yes", "smoke-no"], "required": true},
+        {"id": "sleep", "type": "select", "label": "How many hours do you sleep per night?", "options": ["Less than 4 hours", "4-6 hours", "6-8 hours", "More than 8 hours"], "required": true},
+        {"id": "water", "type": "select", "label": "How much water do you drink per day?", "options": ["Less than 1 liter", "1-2 liters", "2-3 liters", "More than 3 liters"], "required": true},
+        {"id": "comments", "type": "textarea", "label": "Anything else you'd like to share?", "required": false}
+      ]
+    }
+  ]
+}

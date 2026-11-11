@@ -1,15 +1,14 @@
 package SmartState.Configs;
 
-import org.apache.commons.configuration.ConfigurationException;
-import org.apache.commons.configuration.HierarchicalINIConfiguration;
-import org.apache.commons.configuration.SubnodeConfiguration;
-
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 
 /**
- * Configuration file handler 
+ * Configuration file handler
  * @author V.K. Cody Bumgardner
  * @author Caylin Hickey
  * @since 0.1.0
@@ -17,13 +16,29 @@ import java.util.Map;
 
 public class FileConfig {
 
-    private final HierarchicalINIConfiguration iniConfObj;
+    private final Map<String, Map<String, Object>> sections = new HashMap<>();
 
-    public FileConfig(String configFile) throws ConfigurationException {
-        iniConfObj = new HierarchicalINIConfiguration(configFile);
-        iniConfObj.setDelimiterParsingDisabled(true);
-        iniConfObj.setAutoSave(true);
-
+    public FileConfig(String configFile) throws IOException {
+        try (BufferedReader reader = Files.newBufferedReader(Paths.get(configFile))) {
+            String section = "general";
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty() || line.startsWith("#") || line.startsWith(";")) {
+                    continue;
+                }
+                if (line.startsWith("[") && line.endsWith("]")) {
+                    section = line.substring(1, line.length() - 1).trim();
+                    continue;
+                }
+                int eq = line.indexOf('=');
+                if (eq > 0) {
+                    String key = line.substring(0, eq).trim();
+                    String value = line.substring(eq + 1).trim();
+                    sections.computeIfAbsent(section, s -> new HashMap<>()).put(key, value);
+                }
+            }
+        }
     }
 
     public Map<String, Object> getConfigMap() {
@@ -31,19 +46,6 @@ public class FileConfig {
     }
 
     public Map<String, Object> getConfigMap(String section) {
-
-        Map<String, Object> configMap = new HashMap<>();
-
-        SubnodeConfiguration sObj = iniConfObj.getSection(section);
-        final Iterator<String> it = sObj.getKeys();
-        while (it.hasNext()) {
-            final Object key = it.next();
-            final Object value = sObj.getString(key.toString());
-            configMap.put(key.toString(),value);
-        }
-
-        return  configMap;
+        return new HashMap<>(sections.getOrDefault(section, new HashMap<>()));
     }
-
-
 }

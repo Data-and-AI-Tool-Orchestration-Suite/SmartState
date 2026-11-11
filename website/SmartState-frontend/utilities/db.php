@@ -37,6 +37,17 @@ class PostgresDB {
         return self::instance()->prepare($sql);
     }
 
+    public static function setSessionContext(string $userId, bool $isSuperAdmin): void {
+        self::run(
+            "SELECT set_config('app.user_id', ?, false), set_config('app.is_super_admin', ?, false)",
+            [$userId, $isSuperAdmin ? 'true' : 'false']
+        );
+    }
+
+    public static function setSurveyToken(string $token): void {
+        self::run("SELECT set_config('app.survey_token', ?, false)", [$token]);
+    }
+
     public static function close() {
         self::$instance = null;
     }

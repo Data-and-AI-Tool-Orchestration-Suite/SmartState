@@ -1,32 +1,37 @@
+# Every key below can also be supplied as an environment variable named HLQ_<key>.
+# In Docker the engine runs without a config.ini and takes everything from HLQ_* env
+# vars set in docker-compose.yml (see .env at the repo root).
+
 [general]
 
-disable_messaging=false
+disable_messaging=true
 
 web_port=9000
 
-db_host=
-db_name=
-db_user=
+db_host=localhost
+db_name=postgres
+db_user=smartstate_engine
 db_password=
-db_port=
+db_port=5432
 
-twilio_account_sid=0
-twilio_auth_token=0
-twilio_from_number=0
+twilio_account_sid=
+twilio_auth_token=
+twilio_from_number=
+twilio_validate_webhook=true
 
-survey_url=
-
-admin_phone_number=+15555555555
-admin_time_zone=America/New_York
+public_base_url=http://localhost:8080
+survey_url=http://localhost:8080/survey/take-survey/
 
 llm_api_url=
 llm_api_key=
 llm_model=gpt-4o-mini
 
+checkdelay=5000
+checktimer=30000
+
+# LoRaWAN MQTT listener starts only when activeMQTT_host is set
 activeMQTT_user=
 activeMQTT_pass=
 activeMQTT_host=
 activeMQTT_port=
 topic_prefix=gateway2.devices
-
-

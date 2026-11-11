@@ -3,245 +3,239 @@ package SmartState.TimeUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.time.*;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Date;
-import java.util.TimeZone;
 
 public class TimezoneHelper {
-    final int SEC_IN_DAY = 86400;
+    private static final Logger logger = LoggerFactory.getLogger(TimezoneHelper.class);
+    static final int SEC_IN_DAY = 86400;
     private String userTimezone;
-    private String machineTimezone;
-    private Integer timezoneDifference;
+    private final String machineTimezone;
+    private final Clock clock;
 
-    /**
-    * initialize the timezone helper with the user's timezone and the machine's timezone (in seconds)
-    */
     public TimezoneHelper(String userTimezone, String machineTimezone) {
+        this(userTimezone, machineTimezone, Clock.systemUTC());
+    }
+
+    public TimezoneHelper(String userTimezone, String machineTimezone, Clock clock) {
         this.userTimezone = userTimezone;
         this.machineTimezone = machineTimezone;
-        this.timezoneDifference = calculateTZOffset();
-        Logger logger = LoggerFactory.getLogger(TimezoneHelper.class.getName());
-        logger.info("TimezoneHelper initialized with user timezone: " + userTimezone + " and machine timezone: " + machineTimezone + " and timezone difference: " + timezoneDifference);
+        this.clock = clock;
+        logger.info("TimezoneHelper initialized with user timezone: " + userTimezone + " and machine timezone: " + machineTimezone);
     }
 
-    /**
-    * return the timezone difference in seconds
-    * - if behind, + if ahead
-    */
-    public Integer calculateTZOffset() {
-        String timeZone1 = this.userTimezone;
-        String timeZone2 = this.machineTimezone;
-
-        LocalDateTime dt = LocalDateTime.now();
-        ZonedDateTime fromZonedDateTime = dt.atZone(ZoneId.of(timeZone1));
-        ZonedDateTime toZonedDateTime = dt.atZone(ZoneId.of(timeZone2));
-        long diff = Duration.between(fromZonedDateTime, toZonedDateTime).getSeconds();
-        return (int) (diff);
+    private LocalDateTime nowUserLocal() {
+        return ZonedDateTime.ofInstant(Instant.now(clock), ZoneId.of(this.userTimezone)).toLocalDateTime();
     }
 
-    /**
-     * returns a user's local time as String
-     */
-    public String getUserLocalTime() {
-        Date date = new Date();
-        DateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss z");
-        df.setTimeZone(TimeZone.getTimeZone(this.userTimezone));
-        return df.format(date);
+    private LocalDateTime epochUserLocal(long epochSeconds) {
+        return ZonedDateTime.ofInstant(Instant.ofEpochSecond(epochSeconds), ZoneId.of(this.userTimezone)).toLocalDateTime();
     }
 
-    /**
-    * return the date string from adding seconds
-    */
+    public long nowEpochSeconds() {
+        return Instant.now(clock).getEpochSecond();
+    }
+
+    public long secondsToClock(int hour, int minute, boolean addDayIfPast) {
+        return secondsToClock(hour, minute, 0, addDayIfPast);
+    }
+
+    public long secondsToClock(int hour, int minute, int second, boolean addDayIfPast) {
+        LocalDateTime now = nowUserLocal();
+        LocalDateTime target = LocalDateTime.of(now.getYear(), now.getMonth(), now.getDayOfMonth(), hour, minute, second);
+        long seconds = Duration.between(now, target).getSeconds();
+        if (seconds < 0 && addDayIfPast) {
+            seconds += SEC_IN_DAY;
+        }
+        return seconds;
+    }
+
+    public long secondsToWeekday(int isoDayOfWeek, int hour, int minute) {
+        LocalDateTime now = nowUserLocal();
+        LocalDateTime target = LocalDateTime.of(now.toLocalDate(), java.time.LocalTime.of(hour, minute));
+        int daysAhead = isoDayOfWeek - now.getDayOfWeek().getValue();
+        if (daysAhead < 0) {
+            daysAhead += 7;
+        }
+        target = target.plusDays(daysAhead);
+        long seconds = Duration.between(now, target).getSeconds();
+        if (seconds <= 0) {
+            seconds += 7L * SEC_IN_DAY;
+        }
+        return seconds;
+    }
+
+    public boolean isAfterClock(int hour, int minute) {
+        LocalDateTime now = nowUserLocal();
+        LocalDateTime target = LocalDateTime.of(now.getYear(), now.getMonth(), now.getDayOfMonth(), hour, minute, 0);
+        return now.isAfter(target);
+    }
+
+    public boolean epochAfterClock(long epochSeconds, int hour, int minute) {
+        LocalDateTime then = epochUserLocal(epochSeconds);
+        LocalDateTime target = LocalDateTime.of(then.getYear(), then.getMonth(), then.getDayOfMonth(), hour, minute, 0);
+        return then.isAfter(target);
+    }
+
+    public boolean epochBetweenClock(long epochSeconds, int fromHour, int toHour) {
+        int hour = epochUserLocal(epochSeconds).getHour();
+        return hour >= fromHour && hour < toHour;
+    }
+
+    public boolean isSameLocalDateWithBoundary(long epochSeconds, int boundaryHour, int boundaryMinute) {
+        long boundarySeconds = (long) boundaryHour * 3600 + (long) boundaryMinute * 60;
+        LocalDate then = epochUserLocal(epochSeconds).minusSeconds(boundarySeconds).toLocalDate();
+        LocalDate today = nowUserLocal().minusSeconds(boundarySeconds).toLocalDate();
+        return then.equals(today);
+    }
+
+    public boolean epochWasYesterday(long epochSeconds, int boundaryHour, int boundaryMinute) {
+        long boundarySeconds = (long) boundaryHour * 3600 + (long) boundaryMinute * 60;
+        LocalDate then = epochUserLocal(epochSeconds).minusSeconds(boundarySeconds).toLocalDate();
+        LocalDate today = nowUserLocal().minusSeconds(boundarySeconds).toLocalDate();
+        return then.equals(today.minusDays(1));
+    }
+
+    public long nextClockEpoch(int hour, int minute, String timezone) {
+        ZoneId zone = ZoneId.of(timezone == null || timezone.isEmpty() ? this.userTimezone : timezone);
+        ZonedDateTime now = ZonedDateTime.ofInstant(Instant.now(clock), zone);
+        ZonedDateTime target = now.withHour(hour).withMinute(minute).withSecond(0).withNano(0);
+        if (!target.isAfter(now)) {
+            target = target.plusDays(1);
+        }
+        return target.toEpochSecond();
+    }
+
+    public Long parseSmsTime(String body, String keyword) {
+        try {
+            String lower = body.toLowerCase();
+            int idx = lower.indexOf(keyword);
+            if (idx < 0) {
+                return null;
+            }
+            String remainder = lower.substring(idx + keyword.length()).trim();
+            if (remainder.isEmpty()) {
+                return nowEpochSeconds();
+            }
+            remainder = remainder.replaceAll("\\.", "").replaceAll("\\s+", " ");
+            java.util.regex.Matcher matcher = java.util.regex.Pattern
+                    .compile("(\\d{1,2})(?::(\\d{2}))?\\s*([ap])m?")
+                    .matcher(remainder);
+            if (!matcher.find()) {
+                return null;
+            }
+            int hour = Integer.parseInt(matcher.group(1));
+            int minute = matcher.group(2) == null ? 0 : Integer.parseInt(matcher.group(2));
+            boolean pm = matcher.group(3).equals("p");
+            if (hour < 1 || hour > 12 || minute > 59) {
+                return null;
+            }
+            if (hour == 12) {
+                hour = pm ? 12 : 0;
+            } else if (pm) {
+                hour += 12;
+            }
+            LocalDateTime now = nowUserLocal();
+            LocalDateTime parsed = LocalDateTime.of(now.toLocalDate(), java.time.LocalTime.of(hour, minute));
+            if (Duration.between(now, parsed).getSeconds() > 4 * 3600) {
+                parsed = parsed.minusDays(1);
+            }
+            return parsed.atZone(ZoneId.of(this.userTimezone)).toEpochSecond();
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    public Long parseWebsiteTime(String time) {
+        try {
+            java.util.regex.Matcher matcher = java.util.regex.Pattern
+                    .compile("(\\d{1,2}):(\\d{2})")
+                    .matcher(time.trim());
+            if (!matcher.find()) {
+                return null;
+            }
+            int hour = Integer.parseInt(matcher.group(1));
+            int minute = Integer.parseInt(matcher.group(2));
+            if (hour > 23 || minute > 59) {
+                return null;
+            }
+            LocalDateTime now = nowUserLocal();
+            LocalDateTime parsed = LocalDateTime.of(now.toLocalDate(), java.time.LocalTime.of(hour, minute));
+            return parsed.atZone(ZoneId.of(this.userTimezone)).toEpochSecond();
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    public String formatEpochShortTime(long epochSeconds) {
+        return epochUserLocal(epochSeconds).format(DateTimeFormatter.ofPattern("h:mm a"));
+    }
+
+    public String formatHoursMinutes(long seconds) {
+        long hours = seconds / 3600;
+        long minutes = (seconds % 3600) / 60;
+        return hours + "h " + String.format("%02dm", minutes);
+    }
+
+    public long secondsToNextMinuteMark(int mark) {
+        LocalDateTime now = nowUserLocal();
+        LocalDateTime target = LocalDateTime.of(now.getYear(), now.getMonth(), now.getDayOfMonth(), now.getHour(), mark, 0);
+        long seconds = Duration.between(now, target).getSeconds();
+        if (seconds < 0) {
+            seconds = 0;
+        }
+        return seconds;
+    }
+
+    public long secondsToHourBoundaryPlus(int hours) {
+        LocalDateTime now = nowUserLocal();
+        LocalDateTime target = LocalDateTime.of(now.getYear(), now.getMonth(), now.getDayOfMonth(), now.getHour(), 0, 0).plusHours(hours);
+        return Duration.between(now, target).getSeconds();
+    }
+
+    public boolean timerWithinMinuteWindow(long epochSeconds, int fromMinute, int toMinute) {
+        LocalDateTime old = epochUserLocal(epochSeconds);
+        LocalDateTime now = nowUserLocal();
+        LocalDateTime windowStart = LocalDateTime.of(now.getYear(), now.getMonth(), now.getDayOfMonth(), now.getHour(), fromMinute, 0);
+        LocalDateTime windowEnd = LocalDateTime.of(now.getYear(), now.getMonth(), now.getDayOfMonth(), now.getHour(), toMinute, 0);
+        return !old.isBefore(windowStart) && !old.isAfter(windowEnd);
+    }
+
+    public boolean isSameLocalDate(long epochSeconds) {
+        LocalDate then = epochUserLocal(epochSeconds).toLocalDate();
+        LocalDate today = nowUserLocal().toLocalDate();
+        return then.equals(today);
+    }
+
+    public boolean isBeforeClock(int hour, int minute) {
+        return secondsToClock(hour, minute, false) > 0;
+    }
+
     public String getDateFromAddingSeconds(long seconds) {
-        Instant nowUTC = Instant.now();
-        ZoneId userTZ = ZoneId.of(this.userTimezone);
-        ZonedDateTime nowUserTimezone = ZonedDateTime.ofInstant(nowUTC, userTZ);
-        nowUserTimezone = nowUserTimezone.plusSeconds(seconds);
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z");
-        return nowUserTimezone.format(formatter);
+        ZonedDateTime target = ZonedDateTime.ofInstant(Instant.now(clock), ZoneId.of(this.userTimezone)).plusSeconds(seconds);
+        return target.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z"));
     }
 
-    /**
-    * return the seconds until Noon for user timezone
-    */
-    public int getSecondsTo12pm(boolean nextDay) {
-        Instant nowUTC = Instant.now();
-        ZoneId userTZ = ZoneId.of(this.userTimezone);
-        ZonedDateTime nowUserTimezone = ZonedDateTime.ofInstant(nowUTC, userTZ);
-        LocalDateTime nowUserLocalTime = nowUserTimezone.toLocalDateTime();
-        LocalDateTime userLocalTimeNoon = LocalDateTime.of(nowUserLocalTime.getYear(), nowUserLocalTime.getMonth(), nowUserLocalTime.getDayOfMonth(), 12, 0, 0);
-        long secondsUntilNoon = Duration.between(nowUserLocalTime, userLocalTimeNoon).getSeconds();
-        if (secondsUntilNoon < 0 && nextDay) {
-            secondsUntilNoon += SEC_IN_DAY;
-        }
-        return (int) secondsUntilNoon;
+    public String getUserLocalTime() {
+        ZonedDateTime now = ZonedDateTime.ofInstant(Instant.now(clock), ZoneId.of(this.userTimezone));
+        return now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z"));
     }
 
-    /**
-    * return the seconds until Noon for user timezone
-    */
-    public int getSecondsTo6pm() {
-        Instant nowUTC = Instant.now();
-        ZoneId userTZ = ZoneId.of(this.userTimezone);
-        ZonedDateTime nowUserTimezone = ZonedDateTime.ofInstant(nowUTC, userTZ);
-        LocalDateTime nowUserLocalTime = nowUserTimezone.toLocalDateTime();
-        LocalDateTime userLocalTime6pm = LocalDateTime.of(nowUserLocalTime.getYear(), nowUserLocalTime.getMonth(), nowUserLocalTime.getDayOfMonth(), 18, 0, 0);
-        long secondsUntil6pm = Duration.between(nowUserLocalTime, userLocalTime6pm).getSeconds();
-        return (int) secondsUntil6pm;
-    }
-
-    public boolean isTimeWithinFirst15MinutesOfHour(long unixTS) {
-        Instant userUTC = Instant.ofEpochMilli(unixTS*1000L);
-        ZoneId userTZ = ZoneId.of(this.userTimezone);
-        ZonedDateTime oldUserTimezone = ZonedDateTime.ofInstant(userUTC, userTZ);
-        LocalDateTime oldUserLocalTime = oldUserTimezone.toLocalDateTime();
-
-        Instant nowUTC = Instant.now();
-        ZonedDateTime nowUserTimezone = ZonedDateTime.ofInstant(nowUTC, userTZ);
-        LocalDateTime nowUserLocalTime = nowUserTimezone.toLocalDateTime();
-
-        LocalDateTime userLocalTimeHour = LocalDateTime.of(nowUserLocalTime.getYear(), nowUserLocalTime.getMonth(), nowUserLocalTime.getDayOfMonth(), nowUserLocalTime.getHour(), 0, 0);
-        LocalDateTime userLocalTimeHour15 = LocalDateTime.of(nowUserLocalTime.getYear(), nowUserLocalTime.getMonth(), nowUserLocalTime.getDayOfMonth(), nowUserLocalTime.getHour(), 15, 0);
-
-        long secondsUntilHour = Duration.between(oldUserLocalTime, userLocalTimeHour).getSeconds();
-        long secondsUntilHour15 = Duration.between(oldUserLocalTime, userLocalTimeHour15).getSeconds();
-        return secondsUntilHour <= 0 && secondsUntilHour15 >= 0;
-    }
-
-    public boolean isTimeWithinFirst1530MinutesOfHour(long unixTS) {
-        Instant userUTC = Instant.ofEpochMilli(unixTS*1000L);
-        ZoneId userTZ = ZoneId.of(this.userTimezone);
-        ZonedDateTime oldUserTimezone = ZonedDateTime.ofInstant(userUTC, userTZ);
-        LocalDateTime oldUserLocalTime = oldUserTimezone.toLocalDateTime();
-
-        Instant nowUTC = Instant.now();
-        ZonedDateTime nowUserTimezone = ZonedDateTime.ofInstant(nowUTC, userTZ);
-        LocalDateTime nowUserLocalTime = nowUserTimezone.toLocalDateTime();
-
-        LocalDateTime userLocalTimeHour15 = LocalDateTime.of(nowUserLocalTime.getYear(), nowUserLocalTime.getMonth(), nowUserLocalTime.getDayOfMonth(), nowUserLocalTime.getHour(), 15, 0);
-        LocalDateTime userLocalTimeHour30 = LocalDateTime.of(nowUserLocalTime.getYear(), nowUserLocalTime.getMonth(), nowUserLocalTime.getDayOfMonth(), nowUserLocalTime.getHour(), 30, 0);
-
-        long secondsUntilHour15 = Duration.between(oldUserLocalTime, userLocalTimeHour15).getSeconds();
-        long secondsUntilHour30 = Duration.between(oldUserLocalTime, userLocalTimeHour30).getSeconds();
-        return secondsUntilHour15 <= 0 && secondsUntilHour30 >= 0;
-    }
-
-    public long getSecondsToHour15(){
-        Instant nowUTC = Instant.now();
-        ZoneId userTZ = ZoneId.of(this.userTimezone);
-        ZonedDateTime nowUserTimezone = ZonedDateTime.ofInstant(nowUTC, userTZ);
-        LocalDateTime nowUserLocalTime = nowUserTimezone.toLocalDateTime();
-
-        // get the seconds between now and the next hour
-        LocalDateTime userLocalTimeHour15 = LocalDateTime.of(nowUserLocalTime.getYear(), nowUserLocalTime.getMonth(), nowUserLocalTime.getDayOfMonth(), nowUserLocalTime.getHour(), 15, 0);
-        long secondsUntilHour15 = Duration.between(nowUserLocalTime, userLocalTimeHour15).getSeconds();
-        if (secondsUntilHour15 < 0) {
-            secondsUntilHour15 = 0;
-        }
-        return secondsUntilHour15;
-    }
-
-    public long getSecondsToHour30(){
-        Instant nowUTC = Instant.now();
-        ZoneId userTZ = ZoneId.of(this.userTimezone);
-        ZonedDateTime nowUserTimezone = ZonedDateTime.ofInstant(nowUTC, userTZ);
-        LocalDateTime nowUserLocalTime = nowUserTimezone.toLocalDateTime();
-
-        // get the seconds between now and the next hour
-        LocalDateTime userLocalTimeHour30 = LocalDateTime.of(nowUserLocalTime.getYear(), nowUserLocalTime.getMonth(), nowUserLocalTime.getDayOfMonth(), nowUserLocalTime.getHour(), 30, 0);
-        long secondsUntilHour30 = Duration.between(nowUserLocalTime, userLocalTimeHour30).getSeconds();
-        if (secondsUntilHour30 < 0) {
-            secondsUntilHour30 = 0;
-        }
-        return secondsUntilHour30;
-    }
-
-    public long getSecondsUntil2Hours(){
-        Instant nowUTC = Instant.now();
-        ZoneId userTZ = ZoneId.of(this.userTimezone);
-        ZonedDateTime nowUserTimezone = ZonedDateTime.ofInstant(nowUTC, userTZ);
-        LocalDateTime nowUserLocalTime = nowUserTimezone.toLocalDateTime();
-
-        // get the seconds between now and the next hour
-        LocalDateTime userLocalTime2Hours = LocalDateTime.of(nowUserLocalTime.getYear(), nowUserLocalTime.getMonth(), nowUserLocalTime.getDayOfMonth(), nowUserLocalTime.getHour(), 0, 0);
-        userLocalTime2Hours = userLocalTime2Hours.plusHours(2);
-
-        return Duration.between(nowUserLocalTime, userLocalTime2Hours).getSeconds();
-    }
-
-    // is same day <11:59:59pm
-    public boolean isSameDay(long lastKnownTime){
-        // check if lastKnownTime is on the same day as now and before the next day at 4am
-
-        Instant lastKnownUTC = Instant.ofEpochMilli(lastKnownTime*1000L);
-        ZoneId lastKnownTZ = ZoneId.of(this.userTimezone);
-        ZonedDateTime lastKnownTimezone = ZonedDateTime.ofInstant(lastKnownUTC, lastKnownTZ);
-        LocalDateTime lastKnownLocalTime = lastKnownTimezone.toLocalDateTime();
-
-        Instant nowUTC = Instant.now();
-        ZoneId userTZ = ZoneId.of(this.userTimezone);
-        ZonedDateTime nowUserTimezone = ZonedDateTime.ofInstant(nowUTC, userTZ);
-        LocalDateTime nowUserLocalTime = nowUserTimezone.toLocalDateTime();
-
-        LocalDateTime currentTime12am = LocalDateTime.of(nowUserLocalTime.getYear(), nowUserLocalTime.getMonth(), nowUserLocalTime.getDayOfMonth(), 11, 59, 59);
-        long secondsUntil12am = Duration.between(lastKnownLocalTime, currentTime12am).getSeconds();
-
-        return secondsUntil12am <= 86400;
-    }
-
-    public boolean isBeforeNoon() {
-        int timeToNoon = getSecondsTo12pm(false);
-        return timeToNoon > 0;
-    } 
-
-    public boolean isBefore6pm() {
-        int timeTo6pm = getSecondsTo6pm();
-        return timeTo6pm > 0;
-    }
-
-    /**
-     * gets the user's timezone
-     */
     public String getUserTimezone() {
         return this.userTimezone;
     }
 
-    /**
-     * gets the machine's timezone
-     */
     public String getMachineTimezone() {
         return this.machineTimezone;
     }
 
-    /**
-     * gets the timezoneDifference
-     */
-    public int getTimezoneDifference() {
-        return this.timezoneDifference;
-    }
-
-    /**
-     * sets the userTimezone(String)
-     */
     public void setUserTimezone(String userTimezone) {
         this.userTimezone = userTimezone;
     }
-
-    /**
-     * sets the machineTimezone(String)
-     */
-    public void setMachineTimezone(String machineTimezone) {
-        this.machineTimezone = machineTimezone;
-    }
-
-    /**
-     * sets the timezoneDifference(int)
-     */
-    public void setTimezoneDifference(int timezoneDifference) {
-        this.timezoneDifference = timezoneDifference;
-    }
-
 }

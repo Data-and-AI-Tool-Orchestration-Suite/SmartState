@@ -1,13 +1,23 @@
-function showNotification(msg, title) {
+function buildToastContent(msg, title) {
     const content = document.createElement('div');
     content.style.display = 'flex'; // Apply flexbox to align elements
     content.style.justifyContent = 'space-between'; // Space between content and close button
     content.style.alignItems = 'center'; // Align items vertically
-    content.innerHTML = `
-        <div>
-            <h6 class="text-white m-0">${title}</h6>
-            <span class="text-white">${msg}</span>
-        </div>`;
+    const inner = document.createElement('div');
+    const heading = document.createElement('h6');
+    heading.className = 'text-white m-0';
+    heading.textContent = title;
+    const text = document.createElement('span');
+    text.className = 'text-white';
+    text.textContent = msg;
+    inner.appendChild(heading);
+    inner.appendChild(text);
+    content.appendChild(inner);
+    return content;
+}
+
+function showNotification(msg, title) {
+    const content = buildToastContent(msg, title);
 
     Toastify({
         node: content,
@@ -20,15 +30,7 @@ function showNotification(msg, title) {
 }
 
 function showSuccess(msg, title = 'Success') {
-    const content = document.createElement('div');
-    content.style.display = 'flex'; // Apply flexbox to align elements
-    content.style.justifyContent = 'space-between'; // Space between content and close button
-    content.style.alignItems = 'center'; // Align items vertically
-    content.innerHTML = `
-        <div>
-            <h6 class="text-white m-0">${title}</h6>
-            <span class="text-white">${msg}</span>
-        </div>`;
+    const content = buildToastContent(msg, title);
 
     Toastify({
         node: content,
@@ -42,15 +44,7 @@ function showSuccess(msg, title = 'Success') {
 
 
 function showWarning(msg, title = 'Warning') {
-    const content = document.createElement('div');
-    content.style.display = 'flex'; // Apply flexbox to align elements
-    content.style.justifyContent = 'space-between'; // Space between content and close button
-    content.style.alignItems = 'center'; // Align items vertically
-    content.innerHTML = `
-        <div>
-            <h6 class="text-white m-0">${title}</h6>
-            <span class="text-white">${msg}</span>
-        </div>`;
+    const content = buildToastContent(msg, title);
 
     Toastify({
         node: content,
@@ -63,15 +57,7 @@ function showWarning(msg, title = 'Warning') {
 }
 
 function showError(msg, title = 'Error') {
-    const content = document.createElement('div');
-    content.style.display = 'flex'; // Apply flexbox to align elements
-    content.style.justifyContent = 'space-between'; // Space between content and close button
-    content.style.alignItems = 'center'; // Align items vertically
-    content.innerHTML = `
-        <div>
-            <h6 class="text-white m-0">${title}</h6>
-            <span class="text-white">${msg}</span>
-        </div>`;
+    const content = buildToastContent(msg, title);
 
     Toastify({
         node: content,
@@ -101,4 +87,27 @@ function showConfirmModal(){
 }
 function hideConfirmModal(){
     $('#confirmModal').modal("hide");
+}
+
+function formatUtcTimestamp(ts) {
+    if (!ts) {
+        return '';
+    }
+    var normalized = String(ts).replace(' ', 'T');
+    if (!/[Zz]$|[+-]\d{2}:?\d{2}$/.test(normalized)) {
+        normalized += 'Z';
+    }
+    var date = new Date(normalized);
+    if (isNaN(date.getTime())) {
+        return String(ts);
+    }
+    return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function emptyStateHtml(icon, title, hint) {
+    return '<div class="ss-empty-state">' +
+        '<div class="ss-empty-state-icon"><i class="fa ' + icon + '"></i></div>' +
+        '<div class="ss-empty-state-title">' + title + '</div>' +
+        '<div class="ss-empty-state-hint">' + hint + '</div>' +
+        '</div>';
 }

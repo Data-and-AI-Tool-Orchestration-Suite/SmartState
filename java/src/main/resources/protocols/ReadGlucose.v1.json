@@ -1,0 +1,181 @@
+{
+  "schemaVersion": 1,
+  "name": "ReadGlucose",
+  "initialState": "initial",
+  "timers": ["startDeadline", "startWarnDeadline", "endOfEpisodeDeadline"],
+  "settings": {
+    "endProtocolEvent": "receivedEndProtocol",
+    "help": {
+      "keywords": ["help"],
+      "adminTemplate": "ReadGlucose: A participant is in need of help!",
+      "participantReply": "We've notified study administrators that you need help. Someone will be contacting you soon."
+    },
+    "collection": "none",
+    "deviceWindow": {
+      "quietSeconds": 30,
+      "acceptStates": ["waitStart", "warnStartGlucose", "startReading"],
+      "startEvent": "receivedStartGlucose",
+      "endEvent": "receivedEndConnection",
+      "result": {
+        "type": "modulo",
+        "of": "count",
+        "mod": 3,
+        "map": {"0": "low", "2": "high"},
+        "default": "normal"
+      }
+    }
+  },
+  "restore": {
+    "policy": "same-day-else-reset",
+    "terminalStates": ["endReadGlucoseProtocol"],
+    "fallbackState": "waitStart",
+    "noSaveStateEvent": "receivedWaitStart",
+    "replay": {
+      "waitStart": {"restoring": ["receivedWaitStart"]},
+      "warnStartGlucose": {"restoring": ["receivedWarnStart"]},
+      "startReading": {"restoring": ["receivedStartGlucose"], "after": ["receivedError"]},
+      "endOfEpisode": {"restoring": ["receivedEndofEpisode"]}
+    },
+    "resetFire": "receivedWaitStart"
+  },
+  "eventMappings": {
+    "sms": {"defaultAction": "ignore"},
+    "message": {
+      "commandField": "Command",
+      "commands": [
+        {"equals": "startGlucose", "inStates": ["waitStart", "warnStartGlucose"], "fire": "receivedStartGlucose"},
+        {"equals": "endConnection", "inStates": ["startReading"], "fire": "receivedEndConnection"}
+      ],
+      "otherwise": [{"inStates": ["startReading"], "fire": "receivedError"}]
+    }
+  },
+  "states": {
+    "initial": {
+      "transitions": [
+        {"event": "receivedWaitStart", "to": "waitStart"},
+        {"event": "receivedWarnStart", "to": "warnStartGlucose"},
+        {"event": "receivedStartGlucose", "to": "startReading"},
+        {"event": "receivedEndofEpisode", "to": "endOfEpisode"},
+        {"event": "receivedEndProtocol", "to": "endReadGlucoseProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "waitStart", "via": "receivedWaitStart"},
+        {"to": "warnStartGlucose", "via": "receivedWarnStart"},
+        {"to": "endReadGlucoseProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "waitStart": {
+      "entry": [
+        {
+          "type": "setTimer",
+          "timer": "startDeadline",
+          "deadline": {
+            "type": "conditional",
+            "if": {"type": "timerWithinMinuteWindow", "timer": "startDeadline", "fromMinute": 0, "toMinute": 15},
+            "then": {"type": "secondsToNextMinuteMark", "mark": 15},
+            "else": {"type": "fixedSeconds", "seconds": 900}
+          }
+        },
+        {"type": "sendSms", "template": "Hi {first_name}, it's time to check you blood glucose level. Please interact with you blood glucose device to start sending readings."}
+      ],
+      "transitions": [
+        {"event": "receivedStartGlucose", "to": "startReading"},
+        {"after": "startDeadline", "to": "warnStartGlucose"},
+        {"event": "receivedEndProtocol", "to": "endReadGlucoseProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "warnStartGlucose", "via": "timeout:startDeadline"},
+        {"to": "startReading", "via": "receivedStartGlucose"},
+        {"to": "endReadGlucoseProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "warnStartGlucose": {
+      "entry": [
+        {
+          "type": "setTimer",
+          "timer": "startWarnDeadline",
+          "deadline": {
+            "type": "conditional",
+            "if": {"type": "timerWithinMinuteWindow", "timer": "startWarnDeadline", "fromMinute": 15, "toMinute": 30},
+            "then": {"type": "secondsToNextMinuteMark", "mark": 30},
+            "else": {"type": "fixedSeconds", "seconds": 900}
+          }
+        },
+        {"type": "sendSms", "template": "We haven't started receiving your glucose measurements yet. Please interact with you blood glucose device to start sending readings. If you need help, please respond with \"help me\"."}
+      ],
+      "transitions": [
+        {"event": "receivedStartGlucose", "to": "startReading"},
+        {"after": "startWarnDeadline", "to": "missedStart"},
+        {"event": "receivedEndProtocol", "to": "endReadGlucoseProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "startReading", "via": "receivedStartGlucose"},
+        {"to": "missedStart", "via": "timeout:startWarnDeadline"},
+        {"to": "endReadGlucoseProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "startReading": {
+      "entry": [
+        {"type": "sendSms", "template": "Your glucose readings are being received. We'll let you know your results momentarily."}
+      ],
+      "transitions": [
+        {"event": "receivedEndConnection", "to": "finishedReading"},
+        {"event": "receivedError", "to": "notifyAdmin"},
+        {"event": "receivedEndProtocol", "to": "endReadGlucoseProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "notifyAdmin", "via": "receivedError"},
+        {"to": "finishedReading", "via": "receivedEndConnection"},
+        {"to": "endReadGlucoseProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "missedStart": {
+      "entry": [
+        {"type": "sendSms", "template": "{first_name}, we haven't started receiving your glucose readings. We will notify an administrator to assist you."}
+      ],
+      "transitions": [{"auto": true, "to": "notifyAdmin"}],
+      "manualMoves": [{"to": "notifyAdmin", "via": "auto"}]
+    },
+    "notifyAdmin": {
+      "entry": [
+        {"type": "notifyAdmins", "template": "A participant did not successfully interact with their glucose measurement device within the 30 minute time window or an error occurred. They may require help."}
+      ],
+      "transitions": [{"auto": true, "to": "endOfEpisode"}],
+      "manualMoves": [{"to": "endOfEpisode", "via": "auto"}]
+    },
+    "finishedReading": {
+      "entry": [
+        {"type": "resetDeviceWindow"},
+        {
+          "type": "sendResultSms",
+          "source": "deviceResult",
+          "messages": {
+            "low": "All finished. Your blood glucose is low. Take steps to raise it.",
+            "high": "All finished. Your blood glucose is high. Take steps to lower it.",
+            "normal": "All finished. Your blood glucose is normal. Keep up the good work!"
+          }
+        }
+      ],
+      "transitions": [{"auto": true, "to": "endOfEpisode"}],
+      "manualMoves": [{"to": "endOfEpisode", "via": "auto"}]
+    },
+    "endOfEpisode": {
+      "entry": [
+        {"type": "setTimer", "timer": "endOfEpisodeDeadline", "deadline": {"type": "secondsToHourBoundaryPlus", "hours": 2}}
+      ],
+      "transitions": [
+        {"after": "endOfEpisodeDeadline", "to": "waitStart"},
+        {"event": "receivedEndProtocol", "to": "endReadGlucoseProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "waitStart", "via": "timeout:endOfEpisodeDeadline"},
+        {"to": "endReadGlucoseProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "endReadGlucoseProtocol": {
+      "terminal": true,
+      "transitions": [],
+      "manualMoves": []
+    }
+  }
+}

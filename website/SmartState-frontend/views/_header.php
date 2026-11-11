@@ -28,10 +28,10 @@ global $rootURL;
 <nav class="navbar navbar-expand-lg sticky-top">
     <div class="container-fluid">
         <a class="navbar-brand" href="<?= $rootURL ?>/">
-            <span class="brand-text">SmartState</span>
-            <img src="<?= $rootURL ?>/img/UKHCLogo.svg" />
+            <svg class="brand-mark" viewBox="0 0 34 24" aria-hidden="true"><path d="M5 12h8m8 0h8" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".55"/><circle cx="5" cy="12" r="3.2" fill="currentColor" opacity=".55"/><circle cx="17" cy="12" r="4.2" fill="currentColor"/><circle cx="29" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2" opacity=".85"/></svg>
+            <span class="brand-text">Smart<strong>State</strong></span>
         </a>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+        <button class="navbar-toggler" type="button" data-bs-toggle="offcanvas" data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-label="Toggle navigation">
             <i class="fa fa-bars" aria-hidden="true"></i>
         </button>
         <?php include_once __DIR__ . '/_menu.php'; ?>

@@ -16,7 +16,7 @@
 <script type="text/javascript">
     $(function() {
         <?php if (isset($_SESSION['FLASH_ERROR'])): ?>
-        showError('<?php echo htmlspecialchars($_SESSION['FLASH_ERROR']); unset($_SESSION['FLASH_ERROR']); ?>');
+        showError(<?php echo json_encode($_SESSION['FLASH_ERROR'], JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP); unset($_SESSION['FLASH_ERROR']); ?>);
         <?php endif; ?>
         $('.modal').on('shown.bs.modal', function() {
             $(this).find('[autofocus]').trigger('focus');

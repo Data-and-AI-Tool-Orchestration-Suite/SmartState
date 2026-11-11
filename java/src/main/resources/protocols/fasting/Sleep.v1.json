@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "name": "Sleep",
+  "initialState": "initial",
+  "timers": ["timeout24Hours", "sleepWarnDeadline", "wakeWarnDeadline"],
+  "settings": {
+    "endProtocolEvent": "receivedEndProtocol",
+    "collection": "none"
+  },
+  "restore": {
+    "policy": "same-day-else-reset",
+    "terminalStates": ["endProtocol"],
+    "fallbackState": "waitSleep",
+    "noSaveStateEvent": "receivedWaitSleep",
+    "dayBoundaryHour": 17,
+    "dayBoundaryMinute": 5,
+    "replay": {
+      "initial": {"after": ["receivedWaitSleep"]},
+      "waitSleep": {"restoring": ["receivedWaitSleep"]},
+      "warnSleep": {"restoring": ["receivedWarnSleep"]},
+      "sleep": {"restoring": ["receivedSleep"]},
+      "warnWake": {"restoring": ["recievedWarnWake"]},
+      "wake": {"restoring": ["receivedWake"]},
+      "missedWake": {"after": ["receivedWaitSleep"]},
+      "timeout24": {"after": ["receivedWaitSleep"]}
+    },
+    "resetFire": "receivedWaitSleep"
+  },
+  "eventMappings": {
+    "sms": {
+      "defaultAction": "ignore",
+      "fallbackReply": "Your text was not understood. Please send \"SLEEP\" before you begin trying to fall asleep; \"WAKE\" soon after you wake up in the morning.",
+      "rules": [
+        {
+          "keywords": ["wake"],
+          "inStates": ["waitSleep", "warnSleep"],
+          "condition": {"type": "fieldWasYesterday", "field": "sleep_time", "boundaryHour": 4, "boundaryMinute": 0},
+          "flagLastMessage": "wakeBeforeSleep",
+          "notifyAdmins": "[Sleep Baseline ({study})] A participant sent WAKE for yesterday before SLEEP and WAKE for today."
+        },
+        {
+          "keywords": ["wake"],
+          "inStates": ["waitSleep", "warnSleep"],
+          "reply": "No sleep time received for last night. Please send \"SLEEP\" time first followed by your \"WAKE\" time this morning."
+        },
+        {
+          "keywords": ["sleep"],
+          "inStates": ["waitSleep", "warnSleep", "sleep"],
+          "parseTime": true,
+          "saveAs": "sleep_time",
+          "maxBareLength": 5,
+          "fire": "receivedSleep",
+          "parseErrorReply": "Your SLEEP time was not understood. Please send \"SLEEP\" again with the time you started falling asleep. For example, \"SLEEP 9:30 pm\"."
+        },
+        {
+          "keywords": ["wake"],
+          "inStates": ["sleep", "warnWake", "wake"],
+          "parseTime": true,
+          "saveAs": "wake_time",
+          "maxBareLength": 4,
+          "fire": "receivedWake",
+          "parseErrorReply": "Your WAKE time was not understood. Please send \"WAKE\" again with the time you woke up. For example, \"WAKE 7:30 am\"."
+        }
+      ]
+    }
+  },
+  "states": {
+    "initial": {
+      "transitions": [
+        {"event": "receivedWaitSleep", "to": "waitSleep"},
+        {"event": "receivedWarnSleep", "to": "warnSleep"},
+        {"event": "receivedSleep", "to": "sleep"},
+        {"event": "receivedWake", "to": "wake"},
+        {"event": "recievedWarnWake", "to": "warnWake"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "waitSleep", "via": "receivedWaitSleep"},
+        {"to": "warnSleep", "via": "receivedWarnSleep"},
+        {"to": "sleep", "via": "receivedSleep"},
+        {"to": "warnWake", "via": "recievedWarnWake"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "waitSleep": {
+      "entry": [
+        {"type": "clearVars", "keys": ["hasBeenWarned"]},
+        {
+          "type": "setTimer",
+          "timer": "sleepWarnDeadline",
+          "deadline": {
+            "type": "secondsToClock",
+            "hour": 11,
+            "minute": 59,
+            "second": 30,
+            "addDayIf": {"type": "afterClock", "hour": 16, "minute": 45},
+            "minSeconds": 300
+          }
+        }
+      ],
+      "transitions": [
+        {"event": "receivedSleep", "to": "sleep"},
+        {"after": "sleepWarnDeadline", "to": "warnSleep"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "sleep", "via": "receivedSleep", "timeField": "sleep_time"},
+        {"to": "warnSleep", "via": "timeout:sleepWarnDeadline"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "warnSleep": {
+      "entry": [
+        {"type": "setTimer", "timer": "timeout24Hours", "deadline": {"type": "secondsToClock", "hour": 17, "minute": 0, "ifPastAddDay": true}},
+        {"type": "sendSms", "template": "We haven't received your \"SLEEP\" time from last night or your \"WAKE\" time from this morning. Please send these by 5:00pm today. Thank you!"},
+        {"type": "setVar", "key": "hasBeenWarned", "value": "true"}
+      ],
+      "transitions": [
+        {"event": "receivedSleep", "to": "sleep"},
+        {"after": "timeout24Hours", "to": "timeout24"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "timeout24", "via": "timeout:timeout24Hours"},
+        {"to": "sleep", "via": "receivedSleep", "timeField": "sleep_time"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "sleep": {
+      "entry": [
+        {
+          "type": "setTimer",
+          "timer": "wakeWarnDeadline",
+          "deadline": {
+            "type": "secondsToClock",
+            "hour": 11,
+            "minute": 59,
+            "second": 30,
+            "addDayIf": {"type": "afterClock", "hour": 16, "minute": 45},
+            "minSeconds": 300
+          }
+        }
+      ],
+      "transitions": [
+        {"event": "receivedSleep", "to": "sleep"},
+        {"event": "receivedWake", "to": "wake"},
+        {"after": "wakeWarnDeadline", "to": "warnWake"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "sleep", "via": "receivedSleep", "timeField": "sleep_time"},
+        {"to": "wake", "via": "receivedWake", "timeField": "wake_time"},
+        {"to": "warnWake", "via": "timeout:wakeWarnDeadline"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "warnWake": {
+      "entry": [
+        {"type": "setTimer", "timer": "timeout24Hours", "deadline": {"type": "secondsToClock", "hour": 17, "minute": 0, "ifPastAddDay": true}},
+        {
+          "type": "sendSms",
+          "template": "We haven't received your \"WAKE\" time from this morning. Please send this by 5:00pm today. Thank you!",
+          "suppressIf": {"type": "varEquals", "key": "hasBeenWarned", "value": "true"}
+        }
+      ],
+      "transitions": [
+        {"event": "receivedWake", "to": "wake"},
+        {"after": "timeout24Hours", "to": "missedWake"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "missedWake", "via": "timeout:timeout24Hours"},
+        {"to": "wake", "via": "receivedWake", "timeField": "wake_time"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "wake": {
+      "entry": [
+        {"type": "setTimer", "timer": "timeout24Hours", "deadline": {"type": "secondsToClock", "hour": 17, "minute": 0, "ifPastAddDay": true}}
+      ],
+      "transitions": [
+        {"event": "receivedWake", "to": "wake"},
+        {"after": "timeout24Hours", "to": "waitSleep"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": [
+        {"to": "wake", "via": "receivedWake", "timeField": "wake_time"},
+        {"to": "waitSleep", "via": "timeout:timeout24Hours"},
+        {"to": "endProtocol", "via": "receivedEndProtocol"}
+      ]
+    },
+    "missedWake": {
+      "entry": [
+        {"type": "notifyAdmins", "template": "[Sleep Baseline ({study})] A participant sent their SLEEP time but missed their WAKE time.", "suppressOnRestore": true}
+      ],
+      "transitions": [{"auto": true, "to": "waitSleep"}],
+      "manualMoves": [{"to": "waitSleep", "via": "auto"}]
+    },
+    "timeout24": {
+      "entry": [
+        {"type": "notifyAdmins", "template": "[Sleep Baseline ({study})] A participant did not send SLEEP or WAKE during the last cycle.", "suppressOnRestore": false}
+      ],
+      "transitions": [{"auto": true, "to": "waitSleep"}],
+      "manualMoves": [{"to": "waitSleep", "via": "auto"}]
+    },
+    "endProtocol": {
+      "terminal": true,
+      "transitions": [],
+      "manualMoves": []
+    }
+  }
+}

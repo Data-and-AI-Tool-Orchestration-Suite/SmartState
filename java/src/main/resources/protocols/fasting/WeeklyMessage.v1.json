@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "name": "WeeklyMessage",
+  "initialState": "initial",
+  "timers": ["timeout1Week"],
+  "settings": {
+    "endProtocolEvent": "receivedEndProtocol",
+    "collection": "none"
+  },
+  "restore": {
+    "policy": "recompute-from-clock",
+    "terminalStates": ["endProtocol"],
+    "noSaveStateEvent": "receivedWaitWeek",
+    "recomputeRules": [
+      {"if": {"type": "always"}, "fire": "receivedWaitWeek"}
+    ],
+    "resetFire": "recomputeRules"
+  },
+  "eventMappings": {
+    "sms": {"defaultAction": "ignore"}
+  },
+  "states": {
+    "initial": {
+      "transitions": [
+        {"event": "receivedWaitWeek", "to": "waitWeek"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": []
+    },
+    "waitWeek": {
+      "entry": [
+        {"type": "setTimer", "timer": "timeout1Week", "deadline": {"type": "secondsToWeekday", "dayOfWeek": 5, "hour": 17, "minute": 0}}
+      ],
+      "transitions": [
+        {"after": "timeout1Week", "to": "sendWeeklyMessage"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": []
+    },
+    "sendWeeklyMessage": {
+      "entry": [
+        {"type": "sendSms", "template": "Thank you for continuing to send us your \"STARTCAL\" and \"ENDCAL\" each day. Keep up the great work!"}
+      ],
+      "transitions": [{"auto": true, "to": "waitWeek"}],
+      "manualMoves": []
+    },
+    "endProtocol": {
+      "terminal": true,
+      "transitions": [],
+      "manualMoves": []
+    }
+  }
+}

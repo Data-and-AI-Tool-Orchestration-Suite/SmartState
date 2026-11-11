@@ -3,133 +3,218 @@ require_once __DIR__ . '/../utilities/db.php';
 require_once __DIR__ . '/../utilities/UUID.php';
 
 class Participant {
+    private const SORTABLE_COLUMNS = [
+        '0' => "participant_json->>'first_name'",
+        '1' => "participant_json->>'number'",
+        '2' => "participant_json->>'email'",
+        '4' => "participant_json->>'devEUI'"
+    ];
+    private const DEFAULT_SORT = "participant_json->>'first_name'";
+    private const STATE_SORTABLE_COLUMNS = [
+        '0' => 'ts',
+        '1' => 'log_json'
+    ];
+    private const STATE_DEFAULT_SORT = 'ts';
+    private const NOT_STAFF = "COALESCE(participant_json->>'staff', '') != 'true'";
+    private const NOT_HIDDEN = "participant_json->>'hidden' IS NULL";
+    private const IS_HIDDEN = "participant_json->>'hidden' IS NOT NULL";
+
     protected $uuid;
     protected $json;
-    protected $study;
+    protected $studyUuid;
+    protected $protocols;
 
     public function __construct() {
         $this->uuid = UUID::v4();
         $this->json = null;
-        $this->study = null;
+        $this->studyUuid = null;
+        $this->protocols = null;
     }
 
-    public static function create($json, $study): ?Participant {
+    public static function create($json, $studyUuid, array $definitionUuids): ?Participant {
         if (empty($json) || !isset($json))
             throw new Exception('You must provide a JSON object to create a participant');
-        if (empty($study) || !isset($study))
+        if (empty($studyUuid) || !isset($studyUuid))
             throw new Exception('Participant must belong to a study');
         $instance = new self();
         $instance->setJSON($json);
-        $instance->setStudy($study);
+        $instance->setStudyUuid($studyUuid);
         $participant = $instance->save();
 
-        if(is_null($participant)) {
-            return $participant;
-        } else {
-            if ($study != 'ADMIN') {
-                $participant->enroll();
-            }
-            return $participant;
-        }
-    }
-
-    public static function createAdmin($json, $study): ?Participant {
-        if (empty($json) || !isset($json))
-            throw new Exception('You must provide a JSON object to create a participant');
-        if (empty($study) || !isset($study))
-            throw new Exception('Participant must belong to a study');
-        $instance = new self();
-        $instance->setJSON($json);
-        $instance->setStudy($study);
-        $participant = $instance->save();
-
+        if (is_null($participant))
+            return null;
+        foreach ($definitionUuids as $definitionUuid)
+            $participant->addEnrollment($definitionUuid);
         return $participant;
     }
 
-    public static function updateAdmin($json, $study): void {
-        if (empty($json) || !isset($json))
-            throw new Exception('You must provide a JSON object to create a participant');
-        if (empty($study) || !isset($study))
+    public static function update($uuid, $json, $studyUuid, array $definitionUuids): Participant {
+        if (empty($uuid))
+            throw new Exception('You must provide an id to update a participant');
+        if (empty($studyUuid))
             throw new Exception('Participant must belong to a study');
-        $instance = new self();
+        $instance = Participant::withID($uuid);
+        if (is_null($instance))
+            throw new Exception("No participant found with id [{$uuid}]");
+        if ($instance->getStudyUuid() !== $studyUuid)
+            throw new Exception("No participant found with id [{$uuid}] in the current study");
         $instance->setJSON($json);
-        $instance->setStudy($study);
-        $instance->saveAdmin();
+        $instance->syncEnrollments($definitionUuids);
+        return $instance->save();
     }
 
-    public static function listForDatatable(int $start, int $length, string $order_by, string $order_dir, string $filter, string $study): array {
+    public static function delete($uuid, $studyUuid): bool {
+        if (empty($uuid) || is_null($uuid))
+            throw new Exception('ID for participant not found.');
+        if (empty($studyUuid))
+            throw new Exception('Participant must belong to a study');
+        $instance = Participant::withID($uuid);
+        if (is_null($instance))
+            throw new Exception("No participant found with id [{$uuid}]");
+        if ($instance->getStudyUuid() !== $studyUuid)
+            throw new Exception("No participant found with id [{$uuid}] in the current study");
+        $instance->endAllActiveEnrollments('deleted');
+        return $instance->deleteFromID($uuid);
+    }
+
+    public static function hide($uuid, $studyUuid): bool {
+        if (empty($uuid) || is_null($uuid))
+            throw new Exception('ID for participant not found.');
+        if (empty($studyUuid))
+            throw new Exception('Participant must belong to a study');
+        $instance = Participant::withID($uuid);
+        if (is_null($instance))
+            throw new Exception("No participant found with id [{$uuid}]");
+        if ($instance->getStudyUuid() !== $studyUuid)
+            throw new Exception("No participant found with id [{$uuid}] in the current study");
+        Message::hideForParticipant($uuid, $studyUuid);
+        return $instance->hideFromID();
+    }
+
+    public static function unhide($uuid, $studyUuid): bool {
+        if (empty($uuid) || is_null($uuid))
+            throw new Exception('ID for participant not found.');
+        if (empty($studyUuid))
+            throw new Exception('Participant must belong to a study');
+        $instance = Participant::withID($uuid);
+        if (is_null($instance))
+            throw new Exception("No participant found with id [{$uuid}]");
+        if ($instance->getStudyUuid() !== $studyUuid)
+            throw new Exception("No participant found with id [{$uuid}] in the current study");
+        Message::unhideForParticipant($uuid, $studyUuid);
+        return $instance->unhideFromID();
+    }
+
+    public static function getSuccessRate(string $uuid, string $studyUuid): array {
+        $stmt = PostgresDB::run(
+            "SELECT log_json->>'successful_TRE' AS success, log_json->>'after8pm' AS after8pm, log_json->>'total_TRE' AS total
+            FROM state_log
+            WHERE participant_uuid = :uuid AND study_uuid = :study_uuid
+                AND log_json->>'state' = 'startcal' AND jsonb_exists(log_json, 'total_TRE')
+            ORDER BY ts DESC LIMIT 1",
+            ['uuid' => $uuid, 'study_uuid' => $studyUuid]
+        );
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row == null || is_null($row['success']) || is_null($row['total']))
+            return array();
+        return array(
+            'success'  => $row['success'],
+            'after8pm' => is_null($row['after8pm']) ? 0 : $row['after8pm'],
+            'total'    => $row['total']
+        );
+    }
+
+    public static function updateSuccessRate(string $uuid, int $successful, int $total, int $after8pm, string $studyUuid): void {
+        PostgresDB::run(
+            "UPDATE state_log
+            SET log_json = jsonb_set(jsonb_set(jsonb_set(log_json,
+                '{successful_TRE}', to_jsonb(CAST(:successful AS INT))),
+                '{total_TRE}', to_jsonb(CAST(:total AS INT))),
+                '{after8pm}', to_jsonb(CAST(:after8pm AS INT)))
+            WHERE participant_uuid = :uuid AND study_uuid = :study_uuid
+                AND log_json->>'state' = 'startcal' AND jsonb_exists(log_json, 'total_TRE')
+                AND ts = (SELECT ts FROM state_log
+                    WHERE participant_uuid = :uuid_inner AND study_uuid = :study_uuid_inner
+                        AND log_json->>'state' = 'startcal' AND jsonb_exists(log_json, 'total_TRE')
+                    ORDER BY ts DESC LIMIT 1)",
+            [
+                'successful' => $successful,
+                'total' => $total,
+                'after8pm' => $after8pm,
+                'uuid' => $uuid,
+                'study_uuid' => $studyUuid,
+                'uuid_inner' => $uuid,
+                'study_uuid_inner' => $studyUuid
+            ]
+        );
+    }
+
+    public static function hasTREEnrollment(string $uuid, string $studyUuid): bool {
+        $stmt = PostgresDB::run(
+            "SELECT 1 FROM enrollments WHERE participant_uuid = :uuid AND study_uuid = :study_uuid AND protocol_name ILIKE '%TRE%' LIMIT 1",
+            ['uuid' => $uuid, 'study_uuid' => $studyUuid]
+        );
+        return $stmt->fetchColumn() !== false;
+    }
+
+    public static function belongsToStudy(string $uuid, string $studyUuid): bool {
+        try {
+            $stmt = PostgresDB::run(
+                "SELECT 1 FROM participants WHERE participant_uuid = :uuid AND study_uuid = :study_uuid",
+                ['uuid' => $uuid, 'study_uuid' => $studyUuid]
+            );
+            return $stmt->fetchColumn() !== false;
+        } catch (PDOException $e) {
+            return false;
+        }
+    }
+
+    public static function listForDatatable(int $start, int $length, string $order_by, string $order_dir, string $filter, string $studyUuid, bool $showHidden = false): array {
         $matches = [];
-        $query = "SELECT * FROM participants WHERE study = :study";
+        $query = "SELECT participants.*,
+            (SELECT string_agg(e.protocol_name || ' v' || pd.version, ', ')
+             FROM enrollments e
+             JOIN protocol_definitions pd ON pd.definition_uuid = e.definition_uuid
+             WHERE e.participant_uuid = participants.participant_uuid AND e.ended_at IS NULL) AS protocols
+            FROM participants WHERE study_uuid = :study_uuid AND " . self::NOT_STAFF . " AND " . ($showHidden ? self::IS_HIDDEN : self::NOT_HIDDEN);
         $prune = '';
+        $start = (int) $start;
+        $length = (int) $length;
         if ($length > 0)
             $prune .= " OFFSET {$start} ROWS FETCH NEXT {$length} ROWS ONLY";
-        if ($order_by == '' || $order_by == '0')
-            $order_by = "participant_json->>'first_name'";
-        
-        // Sanitize order_by: Allow specific columns only
-        $allowed_columns = [
-            "participant_json->>'first_name'",
-            "participant_json->>'last_name'",
-            "study",
-            "participant_uuid"
-        ];
-        if (!in_array($order_by, $allowed_columns)) {
-            $order_by = "participant_json->>'first_name'";
-        }
-
-        if ($order_dir == '')
-            $order_dir = 'desc';
-        
-        // Sanitize order_dir
-        if (!in_array(strtoupper($order_dir), ['ASC', 'DESC'])) {
-            $order_dir = 'DESC';
-        }
-
+        $order_by = self::SORTABLE_COLUMNS[$order_by] ?? self::DEFAULT_SORT;
+        $order_dir = strtolower($order_dir) === 'asc' ? 'ASC' : 'DESC';
         if (strlen($filter) > 0) {
             $filter = '%' . $filter . '%';
-            $query .= " AND (participant_json->>'last_name' LIKE :filter)";
+            $query .= " AND (participant_json::text ILIKE :filter)";
         }
         $query .= " ORDER BY LOWER({$order_by}) {$order_dir}{$prune}";
-        error_log($query);
         $stmt = PostgresDB::prepare($query);
         if (strlen($filter) > 0) {
             $stmt->bindValue('filter', $filter);
         }
-        if (strlen($study) > 0) {
-            $stmt->bindParam('study', $study);
-        }
+        $stmt->bindValue('study_uuid', $studyUuid);
         $stmt->execute();
         while ($row = $stmt->fetch(PDO::FETCH_LAZY))
             $matches[] = Participant::withRow($row);
         return $matches;
     }
 
-    public static function listStateForDatatable(string $uuid, string $protocol, int $start, int $length, string $order_by, string $order_dir, string $filter): array {
+    public static function listStateForDatatable(string $uuid, string $protocol, int $start, int $length, string $order_by, string $order_dir, string $filter, string $studyUuid): array {
         $matches = [];
         $query = "SELECT ts, log_json FROM state_log";
         $prune = '';
+        $start = (int) $start;
+        $length = (int) $length;
         if ($length > 0)
             $prune .= " OFFSET {$start} ROWS FETCH NEXT {$length} ROWS ONLY";
-        if (is_null($order_by) || $order_by == '' || $order_by == '0')
-            $order_by = 'ts';
-        
-        // Sanitize order_by
-        if (!preg_match('/^[a-zA-Z0-9_]+$/', $order_by)) {
-            $order_by = 'ts';
-        }
+        $order_by = self::STATE_SORTABLE_COLUMNS[$order_by] ?? self::STATE_DEFAULT_SORT;
+        $order_dir = strtolower($order_dir) === 'asc' ? 'ASC' : 'DESC';
 
-        if (is_null($order_dir) || $order_dir == '')
-            $order_dir = 'desc';
-        
-        // Sanitize order_dir
-        if (!in_array(strtoupper($order_dir), ['ASC', 'DESC'])) {
-            $order_dir = 'DESC';
-        }
-
-        $query .= " WHERE (participant_uuid = :uuid) AND (log_json->>'protocol' = :protocol)";
+        $query .= " WHERE (participant_uuid = :uuid) AND (study_uuid = :study_uuid) AND (log_json->>'protocol' = :protocol)";
         if (!is_null($filter) && strlen($filter) > 0) {
             $filter = '%' . $filter . '%';
-            $query .= " AND (log_json LIKE :filter)";
+            $query .= " AND (log_json::text ILIKE :filter)";
         }
         $query .= " ORDER BY {$order_by} {$order_dir}{$prune}";
         $stmt = PostgresDB::prepare($query);
@@ -137,28 +222,12 @@ class Participant {
             $stmt->bindValue('filter', $filter);
         }
         $stmt->bindValue('uuid', $uuid);
+        $stmt->bindValue('study_uuid', $studyUuid);
         $stmt->bindValue('protocol', $protocol);
         $stmt->execute();
         while ($row = $stmt->fetch(PDO::FETCH_LAZY))
             $matches[] = ['ts' => $row['ts'], 'json' => $row['log_json']];
         return $matches;
-    }
-
-    public static function delete($uuid): bool {
-        if (empty($uuid) || is_null($uuid))
-            throw new Exception('ID for participant not found.');
-        $instance = new self();
-        $instance->deleteAllEnrollments();
-        $status = $instance->deleteFromID($uuid);
-        return $status;
-    }
-
-    public static function deleteAdmin($number): bool {
-        if (empty($number) || is_null($number))
-            throw new Exception('Number for admin not found.');
-        $instance = new self();
-        $status = $instance->deleteFromNumber($number);
-        return $status;
     }
 
     public static function getName($uuid): ?string {
@@ -173,83 +242,28 @@ class Participant {
         }
     }
 
-    protected function deleteEnrollment($enrollUUID): void {
-        $query = "DELETE FROM enrollments WHERE enrollment_uuid = :uuid";
-        $stmt = PostgresDB::prepare($query);
-        $stmt->bindValue('uuid', $enrollUUID);
-        $stmt->execute();
-    }
-
-    public static function update($uuid, $json, $study): Participant {
-        if (empty($uuid))
-            throw new Exception('You must provide an id to update a participant');
-        $instance = Participant::withID($uuid);
-        if (is_null($instance))
-            throw new Exception("No participant found with id [{$uuid}]");
-        $instance->setJSON($json);
-        $instance->setStudy($study);
-        $instance->updateEnrollment();
-        return $instance->save();
-    }
-
-    protected function enroll(): void {
-        $groups = json_decode($this->json)->group;
-        foreach($groups as $group) {
-            $query = "INSERT INTO enrollments (enrollment_uuid, participant_uuid, protocol_type_uuid, status) VALUES (gen_random_uuid(), :participant_uuid, :group_uuid, TRUE)";
-            $stmt = PostgresDB::prepare($query);
-            $stmt->bindValue('participant_uuid', $this->uuid);
-            $stmt->bindValue('group_uuid', Participant::getUUIDFromGroup($group));
-            $stmt->execute();
-        }
-    }
-
-    protected function updateEnrollment(): void {
-        $enrollments = $this->getEnrollmentUUID();
-        $groups = json_decode($this->json)->group;
-        $groupsEnrollUUIDs = [];
-        foreach($groups as $group) {
-            $temp = Participant::getEnrollmentUUIDFromProtocolUUID(Participant::getUUIDFromGroup($group));
-            $groupsEnrollUUIDs[] = $temp;
-        }
-
-        // removes enrollments that are not in updated group
-        foreach($enrollments as $enrollment){
-            if (!in_array($enrollment, $groupsEnrollUUIDs)){
-                $this->deleteEnrollment($enrollment);
-            }
-        }
-
-        $enrollments = $this->getEnrollmentUUID(); // update enrollments, if any were deleted
-
-        // inserts new enrollment if it doesn't already exist
-        foreach ($groups as $group){
-            $newEnrollmentUUID = Participant::getEnrollmentUUIDFromProtocolUUID(Participant::getUUIDFromGroup($group));
-            if (!in_array($newEnrollmentUUID, $enrollments)){
-                $query = "INSERT INTO enrollments (enrollment_uuid, participant_uuid, protocol_type_uuid, status) VALUES (gen_random_uuid(), :participant_uuid, :group_uuid, TRUE)";
-                $stmt = PostgresDB::prepare($query);
-                $stmt->bindValue('participant_uuid', $this->uuid);
-                $stmt->bindValue('group_uuid', Participant::getUUIDFromGroup($group));
-                $stmt->execute();
-            }
-        }
-    }
-
-    public static function getParticipantStats(): array {
+    public static function getParticipantStats(string $studyUuid): array {
         $matches = array();
-        $totalQuery = PostgresDB::run("SELECT COUNT(participant_uuid) AS total FROM participants WHERE study != 'ADMIN'");
+        $totalQuery = PostgresDB::run("SELECT COUNT(participant_uuid) AS total FROM participants WHERE study_uuid = :study_uuid AND " . self::NOT_STAFF . " AND " . self::NOT_HIDDEN,
+            ['study_uuid' => $studyUuid]
+        );
         if ($row = $totalQuery->fetch(PDO::FETCH_LAZY))
             $matches['total'] = $row['total'];
         else
             $matches['total'] = 'N/a';
 
-        $activeQuery = PostgresDB::run("SELECT COUNT(participant_uuid) AS active FROM enrollments WHERE status = true");
+        $activeQuery = PostgresDB::run("SELECT COUNT(DISTINCT participant_uuid) AS active FROM enrollments WHERE study_uuid = :study_uuid AND ended_at IS NULL",
+            ['study_uuid' => $studyUuid]
+        );
         if ($row = $activeQuery->fetch(PDO::FETCH_LAZY))
             $matches['active'] = $row['active'];
         else
             $matches['active'] = 'N/a';
 
-        $activeQuery = PostgresDB::run("SELECT COUNT(participant_uuid) AS devices FROM participants WHERE participant_json->>'devEUI' != ''");
-        if ($row = $activeQuery->fetch(PDO::FETCH_LAZY))
+        $devicesQuery = PostgresDB::run("SELECT COUNT(participant_uuid) AS devices FROM participants WHERE study_uuid = :study_uuid AND participant_json->>'devEUI' != '' AND " . self::NOT_STAFF . " AND " . self::NOT_HIDDEN,
+            ['study_uuid' => $studyUuid]
+        );
+        if ($row = $devicesQuery->fetch(PDO::FETCH_LAZY))
             $matches['devices'] = $row['devices'];
         else
             $matches['devices'] = 'N/a';
@@ -257,40 +271,34 @@ class Participant {
         return $matches;
     }
 
-    protected function getEnrollmentUUID(): array {
+    public static function allEnrollments(string $uuid): array {
         $enrollments = [];
-        $query = "SELECT enrollment_uuid FROM enrollments WHERE participant_uuid = :participant_uuid";
-        $stmt = PostgresDB::prepare($query);
-        $stmt->bindValue('participant_uuid', $this->uuid);
-        $stmt->execute();
-        while ($row = $stmt->fetch(PDO::FETCH_LAZY))
-            $enrollments[] = $row['enrollment_uuid'];
+        $query = "SELECT e.enrollment_uuid, e.definition_uuid, e.protocol_name, pd.version,
+            CASE WHEN e.ended_at IS NULL THEN 1 ELSE 0 END AS active
+            FROM enrollments e
+            JOIN protocol_definitions pd ON pd.definition_uuid = e.definition_uuid
+            WHERE e.participant_uuid = :uuid
+            ORDER BY CASE WHEN e.ended_at IS NULL THEN 0 ELSE 1 END ASC, e.enrolled_at DESC";
+        $stmt = PostgresDB::run($query, ['uuid' => $uuid]);
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $enrollments[] = [
+                'enrollment_uuid' => $row['enrollment_uuid'],
+                'definition_uuid' => $row['definition_uuid'],
+                'protocol_name'   => $row['protocol_name'],
+                'version'         => (int) $row['version'],
+                'active'          => ((int) $row['active']) === 1
+            ];
+        }
         return $enrollments;
     }
 
-    protected function deleteAllEnrollments(): void{
-        $query = "DELETE FROM enrollments WHERE participant_uuid = :uuid";
-        $stmt = PostgresDB::prepare($query);
-        $stmt->bindValue('uuid', $this->uuid);
-        $stmt->execute();
-    }
-
-    public static function all(): array {
+    public static function all(string $studyUuid): array {
         $participants = [];
-        $query = "SELECT * FROM participants WHERE study != 'ADMIN' ORDER BY LOWER(participant_json->>'first_name') ASC, LOWER(participant_json->>'last_name') ASC";
-        $stmt = PostgresDB::run($query);
+        $query = "SELECT * FROM participants WHERE study_uuid = :study_uuid AND " . self::NOT_STAFF . " AND " . self::NOT_HIDDEN . " ORDER BY LOWER(participant_json->>'first_name') ASC, LOWER(participant_json->>'last_name') ASC";
+        $stmt = PostgresDB::run($query, ['study_uuid' => $studyUuid]);
         while ($row = $stmt->fetch(PDO::FETCH_LAZY))
             $participants[] = Participant::withRow($row);
         return $participants;
-    }
-
-    public static function allProtocols(): array {
-        $protocols = [];
-        $query = "SELECT * FROM protocol_types ORDER BY LOWER(name) ASC";
-        $stmt = PostgresDB::run($query);
-        while ($row = $stmt->fetch(PDO::FETCH_LAZY))
-            $protocols[] = ProtocolType::withRow($row);
-        return $protocols;
     }
 
     public static function allLocations(): array {
@@ -302,18 +310,21 @@ class Participant {
         return $locations;
     }
 
-    public static function countForDatatable(): int {
-        $stmt = PostgresDB::run("SELECT count(participant_uuid) FROM participants");
+    public static function countForDatatable(string $studyUuid, bool $showHidden = false): int {
+        $stmt = PostgresDB::run("SELECT count(participant_uuid) FROM participants WHERE study_uuid = :study_uuid AND " . self::NOT_STAFF . " AND " . ($showHidden ? self::IS_HIDDEN : self::NOT_HIDDEN),
+            ['study_uuid' => $studyUuid]
+        );
         return $stmt->fetchColumn();
     }
 
-    public static function countFilteredForDatatable(string $filter): int {
-        $query = "SELECT count(participant_uuid) FROM participants";
+    public static function countFilteredForDatatable(string $filter, string $studyUuid, bool $showHidden = false): int {
+        $query = "SELECT count(participant_uuid) FROM participants WHERE study_uuid = :study_uuid AND " . self::NOT_STAFF . " AND " . ($showHidden ? self::IS_HIDDEN : self::NOT_HIDDEN);
         if (!is_null($filter) && strlen($filter) > 0) {
             $filter = "%{$filter}%";
-            $query .= " WHERE (participant_json LIKE :filter)";
+            $query .= " AND (participant_json::text ILIKE :filter)";
         }
         $stmt = PostgresDB::prepare($query);
+        $stmt->bindValue('study_uuid', $studyUuid);
         if (!is_null($filter) && strlen($filter) > 0) {
             $stmt->bindParam('filter', $filter);
         }
@@ -322,20 +333,23 @@ class Participant {
         return $count;
     }
 
-    public static function countForStateDatatable(string $uuid): int {
-        $stmt = PostgresDB::run("SELECT count(participant_uuid) FROM state_log WHERE participant_uuid = :uuid", ['uuid' => $uuid]);
+    public static function countForStateDatatable(string $uuid, string $studyUuid): int {
+        $stmt = PostgresDB::run("SELECT count(participant_uuid) FROM state_log WHERE participant_uuid = :uuid AND study_uuid = :study_uuid",
+            ['uuid' => $uuid, 'study_uuid' => $studyUuid]
+        );
         $count = $stmt->fetchColumn();
         return $count;
     }
 
-    public static function countFilteredForStateDatatable(string $uuid, string $filter): int {
-        $query = "SELECT count(participant_uuid) FROM state_log WHERE participant_uuid = :uuid";
+    public static function countFilteredForStateDatatable(string $uuid, string $filter, string $studyUuid): int {
+        $query = "SELECT count(participant_uuid) FROM state_log WHERE participant_uuid = :uuid AND study_uuid = :study_uuid";
         if (!is_null($filter) && strlen($filter) > 0) {
             $filter = "%{$filter}%";
-            $query .= " AND (log_json LIKE :filter)";
+            $query .= " AND (log_json::text ILIKE :filter)";
         }
         $stmt = PostgresDB::prepare($query);
         $stmt->bindParam('uuid', $uuid);
+        $stmt->bindValue('study_uuid', $studyUuid);
         if (!is_null($filter) && strlen($filter) > 0) {
             $stmt->bindParam('filter', $filter);
         }
@@ -344,31 +358,14 @@ class Participant {
         return $count;
     }
 
-
     public static function getConcatNameFromID($id): string {
-        $stmt = PostgresDB::run("SELECT CONCAT_WS(' ', participant_json->>'first_name', participant_json->>'last_name') AS participant_name 
-                                FROM participants 
+        $stmt = PostgresDB::run("SELECT CONCAT_WS(' ', participant_json->>'first_name', participant_json->>'last_name') AS participant_name
+                                FROM participants
                                 WHERE participant_uuid = :id",
             ['id' => $id]
         );
         $row = $stmt->fetch(PDO::FETCH_LAZY);
         return $row['participant_name'];
-    }
-
-    public static function getGroupFromUUID($uuid): string {
-        $stmt = PostgresDB::run("SELECT participant_json->>'group' AS group_name FROM participants WHERE participant_uuid = :uuid",
-            ['uuid' => $uuid]
-        );
-        $row = $stmt->fetch(PDO::FETCH_LAZY);
-        return $row['group_name'];
-    }
-
-    public static function getUUIDFromGroup($group): string {
-        $stmt = PostgresDB::run("SELECT protocol_type_uuid FROM protocol_types WHERE name = :group",
-            ['group' => $group]
-        );
-        $row = $stmt->fetch(PDO::FETCH_LAZY);
-        return $row['protocol_type_uuid'];
     }
 
     public static function getTimeZoneFromUUID($uuid): string {
@@ -417,24 +414,9 @@ class Participant {
         }
     }
 
-    protected function getEnrollmentUUIDFromProtocolUUID($protocolUUID): ?string {
-
-        try {
-            $stmt = PostgresDB::run("SELECT enrollment_uuid FROM enrollments WHERE protocol_type_uuid = :id::uuid",
-                ['id' => $protocolUUID]
-            );
-            $row = $stmt->fetch(PDO::FETCH_LAZY);
-            if (empty($row['enrollment_uuid']))
-                return null;
-            return $row['enrollment_uuid'];
-        } catch (PDOException $e) {
-            return null;
-        }
-    }
-
-    public static function getCurrentStateString($uuid, $protocol): ?string {
-        $stmt = PostgresDB::run("SELECT log_json->>'state' AS state FROM state_log WHERE participant_uuid = :uuid AND log_json->>'protocol' = :protocol ORDER BY ts DESC LIMIT 1",
-            ['uuid' => $uuid, 'protocol' => $protocol]
+    public static function getCurrentStateString($uuid, $protocol, $studyUuid): ?string {
+        $stmt = PostgresDB::run("SELECT log_json->>'state' AS state FROM state_log WHERE participant_uuid = :uuid AND study_uuid = :study_uuid AND log_json->>'protocol' = :protocol ORDER BY ts DESC LIMIT 1",
+            ['uuid' => $uuid, 'study_uuid' => $studyUuid, 'protocol' => $protocol]
         );
         $row = $stmt->fetch(PDO::FETCH_LAZY);
         if (empty($row['state']))
@@ -454,6 +436,48 @@ class Participant {
         }
     }
 
+    protected function addEnrollment(string $definitionUuid): void {
+        $stmt = PostgresDB::run("SELECT name FROM protocol_definitions WHERE definition_uuid = :definition_uuid AND study_uuid = :study_uuid AND status = 'published'",
+            ['definition_uuid' => $definitionUuid, 'study_uuid' => $this->studyUuid]
+        );
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row == null)
+            throw new Exception("No published protocol definition found with id [{$definitionUuid}] in the current study");
+        PostgresDB::run("INSERT INTO enrollments (participant_uuid, definition_uuid, study_uuid, protocol_name) VALUES (?,?,?,?)",
+            [$this->uuid, $definitionUuid, $this->studyUuid, $row['name']]
+        );
+    }
+
+    protected function syncEnrollments(array $definitionUuids): void {
+        $active = [];
+        $stmt = PostgresDB::run("SELECT enrollment_uuid, definition_uuid FROM enrollments WHERE participant_uuid = :uuid AND ended_at IS NULL",
+            ['uuid' => $this->uuid]
+        );
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC))
+            $active[$row['definition_uuid']] = $row['enrollment_uuid'];
+
+        foreach ($active as $definitionUuid => $enrollmentUuid) {
+            if (!in_array($definitionUuid, $definitionUuids))
+                $this->endEnrollment($enrollmentUuid, 'unenrolled');
+        }
+        foreach ($definitionUuids as $definitionUuid) {
+            if (!array_key_exists($definitionUuid, $active))
+                $this->addEnrollment($definitionUuid);
+        }
+    }
+
+    protected function endEnrollment(string $enrollmentUuid, string $reason): void {
+        PostgresDB::run("UPDATE enrollments SET ended_at = (NOW() AT TIME ZONE 'utc'), end_reason = :reason WHERE enrollment_uuid = :uuid AND ended_at IS NULL",
+            ['reason' => $reason, 'uuid' => $enrollmentUuid]
+        );
+    }
+
+    protected function endAllActiveEnrollments(string $reason): void {
+        PostgresDB::run("UPDATE enrollments SET ended_at = (NOW() AT TIME ZONE 'utc'), end_reason = :reason WHERE participant_uuid = :uuid AND ended_at IS NULL",
+            ['reason' => $reason, 'uuid' => $this->uuid]
+        );
+    }
+
     protected function loadByID( $uuid ): void {
         $stmt = PostgresDB::run(
             "SELECT * FROM participants WHERE participant_uuid = :id ORDER BY participant_uuid OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY",
@@ -469,25 +493,21 @@ class Participant {
     protected function fill( $row ): void {
         $this->uuid = $row['participant_uuid'];
         $this->json = $row['participant_json'];
-        $this->study = $row['study'];
+        $this->studyUuid = $row['study_uuid'];
+        if (isset($row['protocols']))
+            $this->protocols = $row['protocols'];
     }
 
     protected function save(): ?Participant {
         $exists = Participant::withID($this->uuid);
         if (is_null($exists)) {
-            $insert = "INSERT INTO participants (participant_uuid, study, participant_json) VALUES (?,?,?)";
-            PostgresDB::run($insert, [$this->uuid, $this->study, $this->json]);
+            $insert = "INSERT INTO participants (participant_uuid, study_uuid, participant_json) VALUES (?,?,?)";
+            PostgresDB::run($insert, [$this->uuid, $this->studyUuid, $this->json]);
         } else {
-            $update = "UPDATE participants SET participant_json=?, study=? WHERE participant_uuid=?";
-            PostgresDB::run($update, [$this->json, $this->study, $this->uuid]);
+            $update = "UPDATE participants SET participant_json=? WHERE participant_uuid=? AND study_uuid=?";
+            PostgresDB::run($update, [$this->json, $this->uuid, $this->studyUuid]);
         }
         return Participant::withID($this->uuid);
-    }
-
-    protected function saveAdmin(): void {
-        $number = json_decode($this->json)->number;
-        $update = "UPDATE participants SET participant_json=?, study=? WHERE participant_json->>'number'=?";
-        PostgresDB::run($update, [$this->json, $this->study, $number]);
     }
 
     protected function deleteFromID( $uuid ): bool {
@@ -500,9 +520,10 @@ class Participant {
             return false;
     }
 
-    protected function deleteFromNumber( $number ): bool {
-        $stmt = PostgresDB::prepare("DELETE FROM participants WHERE participant_json->>'number' = :number");
-        $stmt->bindParam('number', $number);
+    protected function hideFromID(): bool {
+        $stmt = PostgresDB::prepare("UPDATE participants SET participant_json = jsonb_set(participant_json, '{hidden}', '\"true\"'::jsonb) WHERE participant_uuid = :uuid AND study_uuid = :study_uuid");
+        $stmt->bindParam('uuid', $this->uuid);
+        $stmt->bindParam('study_uuid', $this->studyUuid);
         $stmt->execute();
         if ($stmt->rowCount() > 0)
             return true;
@@ -510,49 +531,51 @@ class Participant {
             return false;
     }
 
-    /**
-     * @return string
-     */
+    protected function unhideFromID(): bool {
+        $stmt = PostgresDB::prepare("UPDATE participants SET participant_json = participant_json - 'hidden' WHERE participant_uuid = :uuid AND study_uuid = :study_uuid");
+        $stmt->bindParam('uuid', $this->uuid);
+        $stmt->bindParam('study_uuid', $this->studyUuid);
+        $stmt->execute();
+        if ($stmt->rowCount() > 0)
+            return true;
+        else
+            return false;
+    }
+
+    public function isHidden(): bool {
+        $decoded = json_decode($this->json ?? '', true);
+        return is_array($decoded) && isset($decoded['hidden']);
+    }
+
     public function getID(): string {
         return $this->uuid;
     }
 
-    /**
-     * @return string
-     */
     public function getJSON(): string {
         return $this->json;
     }
 
-    /**
-     * @param string $json
-     */
     public function setJSON(string $json): void {
         $this->json = $json;
     }
 
-    /**
-     * @return string
-     */
-    public function getStudy(): string {
-        return $this->study;
+    public function getStudyUuid(): ?string {
+        return $this->studyUuid;
     }
 
-    /**
-     * @param string $study
-     */
-    public function setStudy(string $study): void {
-        $this->study = $study;
+    public function setStudyUuid(string $studyUuid): void {
+        $this->studyUuid = $studyUuid;
     }
 
-    /**
-     * @return array|mixed
-     */
+    public function getProtocols(): ?string {
+        return $this->protocols;
+    }
+
     public function jsonSerialize(): array {
         return [
-            'uuid'      => $this->getID(),
-            'json'      => $this->getJSON(),
-            'study'     => $this->getStudy()
+            'uuid'       => $this->getID(),
+            'json'       => $this->getJSON(),
+            'study_uuid' => $this->getStudyUuid()
         ];
     }
 }

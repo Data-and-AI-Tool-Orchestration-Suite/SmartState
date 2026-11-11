@@ -2,96 +2,68 @@
 /** @var UserSession $userSession */
 $page = 'survey';
 global $rootURL;
+$surveyTitle = !empty($surveyKey) ? ucwords(str_replace(['_', '-'], ' ', $surveyKey)) : 'Your Responses Matter';
 include_once __DIR__ . '/../_header_no_sidebar.php';
 ?>
     <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-2 mb-3 border-bottom">
-        <h1 class="h4">Health Survey - <span class="text-muted">Your Healthy Habits Matter</span></h1>
+        <h1 class="h4">Survey - <span class="text-muted"><?= htmlspecialchars($surveyTitle) ?></span></h1>
     </div>
 
     <div class="row">
-        <div class="offset-md-1 col-md-10 offset-md-1">
-            <form>
-                <div class="form-group mb-2">
-                    <label for="exercise">How often do you exercise per week?</label>
-                    <select class="form-control" id="exercise">
-                        <option value="">Select an option</option>
-                        <option value="Never">Never</option>
-                        <option value="1-2 times">1-2 times</option>
-                        <option value="3-4 Times">3-4 times</option>
-                        <option value="5+ times">5+ times</option>
-                    </select>
-                </div>
-                <div class="form-group mb-2">
-                    <label for="diet">How would you describe your diet?</label>
-                    <select class="form-control" id="diet">
-                        <option value="">Select an option</option>
-                        <option value="Poor">Poor</option>
-                        <option value="Average">Average</option>
-                        <option value="Healthy">Healthy</option>
-                        <option value="Very Healthy">Very Healthy</option>
-                    </select>
-                </div>
-                <div class="form-group mb-2">
-                    <label>Do you smoke?</label>
-                    <div class="form-check">
-                        <input class="form-check-input" type="radio" name="smoke" id="smoke-yes" value="yes">
-                        <label class="form-check-label" for="smoke-yes">Yes</label>
-                    </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="radio" name="smoke" id="smoke-no" value="no">
-                        <label class="form-check-label" for="smoke-no">No</label>
-                    </div>
-                </div>
-                <div class="form-group mb-2">
-                    <label>How many hours of sleep do you get per night?</label>
-                    <select class="form-control" id="sleep">
-                        <option value="">Select an option</option>
-                        <option value="Less than 4 hours">Less than 4 hours</option>
-                        <option value="4-6 hours">4-6 hours</option>
-                        <option value="6-8 hours">6-8 hours</option>
-                        <option value="More than 8 hours">More than 8 hours</option>
-                    </select>
-                </div>
-                <div class="form-group mb-2">
-                    <label>How much water do you drink daily?</label>
-                    <select class="form-control" id="water">
-                        <option value="">Select an option</option>
-                        <option value="Less than 1 liter">Less than 1 liter</option>
-                        <option value="1-2 liters">1-2 liters</option>
-                        <option value="2-3 liters">2-3 liters</option>
-                        <option value="More than 3 liters">More than 3 liters</option>
-                    </select>
-                </div>
-                <div class="form-group mb-2">
-                    <label for="comments">Additional Healthy Habits or Concerns</label>
-                    <textarea class="form-control" id="comments" rows="3" placeholder="Enter your habits or concerns"></textarea>
-                </div>
+        <div class="offset-md-1 col-md-10">
+<?php if (empty($questions)): ?>
+            <h4 class="text-center">There is nothing we need to collect from you right now.</h4>
+            <br>
+            <p class="text-center">Thank you! You can close this window now.</p>
+<?php else: ?>
+            <form id="survey-form">
+                <?php foreach ($questions as $question): ?>
+                    <?php include __DIR__ . '/_questions.php'; ?>
+                <?php endforeach; ?>
                 <button id="finished-btn" type="submit" class="btn btn-primary">Submit</button>
+            </form>
+<?php endif; ?>
         </div>
     </div>
 
-    <script type="text/javascript" src="/js/uuid4.js"></script>
+<?php if (!empty($questions)): ?>
     <script type="text/javascript">
-        var token = "<?= $token; ?>";
-        var participantUUID = "<?= $participantUUID;?>";
+        var token = <?= json_encode($token) ?>;
+        var surveyQuestions = <?= json_encode(array_values(array_map(function($q) {
+            return [
+                'id' => $q['id'] ?? '',
+                'type' => $q['type'] ?? 'textarea',
+                'required' => !empty($q['required'])
+            ];
+        }, $questions))) ?>;
 
         $('#finished-btn').click(function(event) {
             event.preventDefault();
 
-            let answers = {
-                exercise: $('#exercise').val(),
-                diet: $('#diet').val(),
-                smoke: $('input[name="smoke"]:checked').val(),
-                sleep: $('#sleep').val(),
-                water: $('#water').val(),
-                comments: $('#comments').val()
-            };
-
-            for (let key in answers) {
-                if (!answers[key] && key !== 'comments') {
-                    showError("Please answer all questions before submitting.");
+            let answers = {};
+            let missing = false;
+            surveyQuestions.forEach(function(question) {
+                if (!question.id) {
                     return;
                 }
+                let value;
+                if (question.type === 'radio') {
+                    value = $('input[name="' + question.id + '"]:checked').val();
+                } else {
+                    value = $('#' + question.id).val();
+                }
+                if (typeof value === 'string') {
+                    value = value.trim();
+                }
+                answers[question.id] = value;
+                if (question.required && !value) {
+                    missing = true;
+                }
+            });
+
+            if (missing) {
+                showError("Please answer all questions before submitting.");
+                return;
             }
 
             $.ajax({
@@ -99,12 +71,11 @@ include_once __DIR__ . '/../_header_no_sidebar.php';
                 type: 'POST',
                 data: {
                     'answers': answers,
-                    'token': token,
-                    'participantUUID': participantUUID
+                    'token': token
                 },
                 success: function(data) {
                     if (data.success) {
-                        window.location.href = "/survey/thank-you";
+                        window.location.href = '<?= $rootURL ?>/survey/thank-you?token=' + encodeURIComponent(token);
                     } else {
                         showError(data.error_message);
                         return null;
@@ -120,6 +91,7 @@ include_once __DIR__ . '/../_header_no_sidebar.php';
             });
         });
     </script>
+<?php endif; ?>
 
 <?php
 include_once __DIR__ . '/../_footer.php';

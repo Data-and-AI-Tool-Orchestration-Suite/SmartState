@@ -1,787 +1,511 @@
 package SmartState.Database;
 
 import SmartState.Launcher;
-import com.google.gson.Gson;
-import org.apache.commons.dbcp2.*;
-import org.apache.commons.pool2.ObjectPool;
-import org.apache.commons.pool2.impl.GenericObjectPool;
+import org.apache.commons.dbcp2.BasicDataSource;
 import org.json.JSONObject;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class DBEngine {
-    private Gson gson;
-    private DataSource ds;
+    private BasicDataSource ds;
 
     public DBEngine() {
-
         try {
-            gson = new Gson();
-            // Driver needs to be identified in order to load the namespace in the JVM
-            String dbDriver = "org.postgresql.Driver";
-
-            Class.forName(dbDriver).newInstance();
-
-            String dbConnectionString = "jdbc:postgresql://" + Launcher.config.getStringParam("db_host") + ":"
-                    + Launcher.config.getStringParam("db_port") + "/" + Launcher.config.getStringParam("db_name")
-                    + "?ssl=false";
-
-            ds = setupDataSource(dbConnectionString, Launcher.config.getStringParam("db_user"),
-                    Launcher.config.getStringParam("db_password"));
+            String dbConnectionString = "jdbc:postgresql://" + Launcher.config.getStringParam("db_host") + ":" + Launcher.config.getStringParam("db_port") + "/" + Launcher.config.getStringParam("db_name");
+            ds = new BasicDataSource();
+            ds.setDriverClassName("org.postgresql.Driver");
+            ds.setUrl(dbConnectionString);
+            ds.setUsername(Launcher.config.getStringParam("db_user"));
+            ds.setPassword(Launcher.config.getStringParam("db_password"));
+            ds.setMaxTotal(16);
+            ds.setMaxIdle(4);
+            ds.setDefaultQueryTimeout(30);
         } catch (Exception ex) {
             ex.printStackTrace();
         }
     }
 
-    public static DataSource setupDataSource(String connectURI, String login, String password) {
-        //
-        // First, we'll create a ConnectionFactory that the
-        // pool will use to create Connections.
-        // We'll use the DriverManagerConnectionFactory,
-        // using to connect string passed in the command line
-        // arguments.
-        //
-        ConnectionFactory connectionFactory;
-        if ((login == null) && (password == null)) {
-            connectionFactory = new DriverManagerConnectionFactory(connectURI, null);
-        } else {
-            connectionFactory = new DriverManagerConnectionFactory(connectURI,
-                    login, password);
+    public boolean isHealthy() {
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement("SELECT 1");
+             ResultSet rs = stmt.executeQuery()) {
+            return rs.next();
+        } catch (Exception ex) {
+            return false;
         }
-
-        //
-        // Next we'll create the PoolableConnectionFactory, which wraps
-        // the "real" Connections created by the ConnectionFactory with
-        // the classes that implement the pooling functionality.
-        //
-        PoolableConnectionFactory poolableConnectionFactory = new PoolableConnectionFactory(connectionFactory, null);
-
-        //
-        // Now we'll need a ObjectPool that serves as the
-        // actual pool of connections.
-        //
-        // We'll use a GenericObjectPool instance, although
-        // any ObjectPool implementation will suffice.
-        //
-        ObjectPool<PoolableConnection> connectionPool = new GenericObjectPool<>(poolableConnectionFactory);
-
-        // Set the factory's pool property to the owning pool
-        poolableConnectionFactory.setPool(connectionPool);
-
-        //
-        // Finally, we create the PoolingDriver itself,
-        // passing in the object pool we created.
-        //
-        return new PoolingDataSource<>(connectionPool);
     }
 
-    public int executeUpdate(String stmtString) {
-        Connection conn = null;
-        Statement stmt = null;
-        int result = -1;
-        try {
-            conn = ds.getConnection();
-            stmt = conn.createStatement();
-            result = stmt.executeUpdate(stmtString);
-
+    public List<Map<String, String>> getActiveEnrollments() {
+        List<Map<String, String>> rows = new ArrayList<>();
+        String query = "SELECT e.enrollment_uuid, e.participant_uuid, e.definition_uuid, e.protocol_name, e.study_uuid, " +
+                "s.name AS study_name, pd.version, p.participant_json " +
+                "FROM enrollments e " +
+                "JOIN protocol_definitions pd ON pd.definition_uuid = e.definition_uuid " +
+                "JOIN participants p ON p.participant_uuid = e.participant_uuid " +
+                "JOIN studies s ON s.study_uuid = e.study_uuid " +
+                "WHERE e.ended_at IS NULL AND pd.status IN ('published', 'archived')";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query);
+             ResultSet rs = stmt.executeQuery()) {
+            while (rs.next()) {
+                rows.add(enrollmentRow(rs));
+            }
         } catch (Exception ex) {
             ex.printStackTrace();
-        } finally {
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
         }
-        return result;
+        return rows;
     }
 
-    public Map<String, String> getParticipantIdFromPhoneNumber(String phoneNumber) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        Map<String, String> participantId = new HashMap<>();
-        try {
-            String queryString = "SELECT participant_uuid, study FROM participants WHERE participant_json->>'number' = ?";
+    public Map<String, String> getActiveEnrollment(String participantUuid, String protocolName) {
+        String query = "SELECT e.enrollment_uuid, e.participant_uuid, e.definition_uuid, e.protocol_name, e.study_uuid, " +
+                "s.name AS study_name, pd.version, p.participant_json " +
+                "FROM enrollments e " +
+                "JOIN protocol_definitions pd ON pd.definition_uuid = e.definition_uuid " +
+                "JOIN participants p ON p.participant_uuid = e.participant_uuid " +
+                "JOIN studies s ON s.study_uuid = e.study_uuid " +
+                "WHERE e.participant_uuid = ?::uuid AND e.protocol_name = ? AND e.ended_at IS NULL";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, participantUuid);
+            stmt.setString(2, protocolName);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return enrollmentRow(rs);
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return null;
+    }
 
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(queryString);
+    private Map<String, String> enrollmentRow(ResultSet rs) throws Exception {
+        Map<String, String> row = new HashMap<>();
+        row.put("enrollment_uuid", rs.getString("enrollment_uuid"));
+        row.put("participant_uuid", rs.getString("participant_uuid"));
+        row.put("definition_uuid", rs.getString("definition_uuid"));
+        row.put("protocol_name", rs.getString("protocol_name"));
+        row.put("study_uuid", rs.getString("study_uuid"));
+        row.put("study_name", rs.getString("study_name"));
+        row.put("version", rs.getString("version"));
+        row.put("participant_json", rs.getString("participant_json"));
+        return row;
+    }
+
+    public String getProtocolDefinitionJson(String definitionUuid) {
+        String query = "SELECT definition FROM protocol_definitions WHERE definition_uuid = ?::uuid";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, definitionUuid);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return null;
+    }
+
+    public void pruneSaveStateEntries(String enrollmentUuid) {
+        String query = "DELETE FROM save_state WHERE ts NOT IN (SELECT ts FROM save_state WHERE enrollment_uuid = ?::uuid ORDER BY ts DESC LIMIT 50) AND enrollment_uuid = ?::uuid";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, enrollmentUuid);
+            stmt.setString(2, enrollmentUuid);
+            stmt.executeUpdate();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    public boolean uploadSaveState(String enrollmentUuid, String studyUuid, String stateJson) {
+        if (enrollmentUuid == null || stateJson == null) {
+            return false;
+        }
+        pruneSaveStateEntries(enrollmentUuid);
+        String query = "INSERT INTO save_state (enrollment_uuid, study_uuid, ts, state_json) VALUES (?::uuid, ?::uuid, timezone('utc', now()), ?::jsonb)";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, enrollmentUuid);
+            stmt.setString(2, studyUuid);
+            stmt.setString(3, stateJson);
+            stmt.executeUpdate();
+            return true;
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            return false;
+        }
+    }
+
+    public String getSaveStateByEnrollment(String enrollmentUuid) {
+        String query = "SELECT state_json FROM save_state WHERE enrollment_uuid = ?::uuid ORDER BY ts DESC LIMIT 1";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, enrollmentUuid);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return "";
+    }
+
+    public void insertStateLog(String participantUuid, String enrollmentUuid, String studyUuid, String logJson) {
+        String query = "INSERT INTO state_log (participant_uuid, enrollment_uuid, study_uuid, ts, log_json) VALUES (?::uuid, ?::uuid, ?::uuid, NOW(), ?::jsonb)";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, participantUuid);
+            stmt.setString(2, enrollmentUuid);
+            stmt.setString(3, studyUuid);
+            stmt.setString(4, logJson);
+            stmt.executeUpdate();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    public String getParticipantCurrentState(String participantUuid, String protocol) {
+        String query = "SELECT log_json->>'state' FROM state_log WHERE participant_uuid = ?::uuid AND log_json->>'protocol' = ? ORDER BY ts DESC LIMIT 1";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, participantUuid);
+            stmt.setString(2, protocol);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return "";
+    }
+
+    public void insertOutgoingMessage(String messageUuid, String participantUuid, String studyUuid, String timestamp, String messageJson) {
+        String query = "INSERT INTO messages (message_uuid, participant_uuid, study_uuid, ts, message_direction, message_json) VALUES (?::uuid, ?::uuid, ?::uuid, ?::timestamp, 'outgoing', ?::jsonb)";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, messageUuid);
+            stmt.setString(2, participantUuid);
+            stmt.setString(3, studyUuid);
+            stmt.setString(4, timestamp);
+            stmt.setString(5, messageJson);
+            stmt.executeUpdate();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    public void insertIncomingMessage(String participantUuid, String studyUuid, String messageJson) {
+        String query = "INSERT INTO messages (message_uuid, participant_uuid, study_uuid, ts, message_direction, message_json) VALUES (gen_random_uuid(), ?::uuid, ?::uuid, NOW(), 'incoming', ?::jsonb)";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, participantUuid);
+            stmt.setString(2, studyUuid);
+            stmt.setString(3, messageJson);
+            stmt.executeUpdate();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    public void insertQueuedMessage(String messageUuid, String participantUuid, String studyUuid, String toNumber, String fromNumber, String scheduledFor, String messageJson) {
+        String query = "INSERT INTO queued_messages (message_uuid, participant_uuid, study_uuid, toNumber, fromNumber, scheduledFor, message_json) VALUES (?::uuid, ?::uuid, ?::uuid, ?, ?, ?::timestamp, ?::jsonb)";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, messageUuid);
+            stmt.setString(2, participantUuid);
+            stmt.setString(3, studyUuid);
+            stmt.setString(4, toNumber);
+            stmt.setString(5, fromNumber);
+            stmt.setString(6, scheduledFor);
+            stmt.setString(7, messageJson);
+            stmt.executeUpdate();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    public void processDueQueuedMessages() {
+        String selectQuery = "SELECT message_uuid, participant_uuid, study_uuid, toNumber, message_json->>'Body' AS body FROM queued_messages WHERE scheduledFor <= NOW() FOR UPDATE SKIP LOCKED";
+        String deleteQuery = "DELETE FROM queued_messages WHERE message_uuid = ?::uuid";
+        try (Connection conn = ds.getConnection()) {
+            conn.setAutoCommit(false);
+            try (PreparedStatement stmt = conn.prepareStatement(selectQuery);
+                 ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    Launcher.msgUtils.sendMessage(rs.getString("toNumber"), rs.getString("body"),
+                            rs.getString("participant_uuid"), rs.getString("study_uuid"));
+                    try (PreparedStatement delete = conn.prepareStatement(deleteQuery)) {
+                        delete.setString(1, rs.getString("message_uuid"));
+                        delete.executeUpdate();
+                    }
+                }
+                conn.commit();
+            } catch (Exception ex) {
+                conn.rollback();
+                throw ex;
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    public List<String[]> getStaffParticipants(String studyUuid) {
+        List<String[]> staff = new ArrayList<>();
+        String query = "SELECT participant_uuid, participant_json->>'number' AS number FROM participants WHERE study_uuid = ?::uuid AND participant_json->>'staff' = 'true'";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, studyUuid);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    staff.add(new String[]{rs.getString("participant_uuid"), rs.getString("number")});
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return staff;
+    }
+
+    public List<Map<String, String>> getParticipantsByPhone(String phoneNumber) {
+        List<Map<String, String>> rows = new ArrayList<>();
+        String query = "SELECT p.participant_uuid, p.study_uuid, s.name AS study_name FROM participants p JOIN studies s ON s.study_uuid = p.study_uuid WHERE p.participant_json->>'number' = ?";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
             stmt.setString(1, phoneNumber);
-            rs = stmt.executeQuery();
-
-            while (rs.next()) {
-                participantId.put(rs.getString("study"), rs.getString("participant_uuid"));
-            }
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-        return participantId;
-    }
-
-    public List<Map<String, String>> getParticipantMapByGroup(String study, String groupName) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        List<Map<String, String>> participantMaps = null;
-        try {
-            participantMaps = new ArrayList<>();
-
-            String queryString = "SELECT participant_uuid, participant_json FROM participants WHERE EXISTS (SELECT 1 FROM jsonb_array_elements_text(participant_json->'group') AS elem WHERE elem = ?)";
-
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(queryString);
-            stmt.setString(1, groupName);
-            rs = stmt.executeQuery();
-
-            while (rs.next()) {
-                Map<String, String> participantMap = gson.fromJson(rs.getString("participant_json"), Map.class);
-                participantMap.put("participant_uuid", rs.getString("participant_uuid"));
-                participantMap.put("study", study);
-                participantMaps.add(participantMap);
-            }
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-
-        return participantMaps;
-    }
-
-    public String getEnrollmentUUIDFromName(String name) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        String result = "";
-        try {
-            String query = "SELECT enrollment_uuid FROM enrollments WHERE protocol_type_uuid IN (SELECT protocol_type_uuid FROM protocol_types WHERE name = ?)";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, name);
-            rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                result = rs.getString(1);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    Map<String, String> row = new HashMap<>();
+                    row.put("participant_uuid", rs.getString("participant_uuid"));
+                    row.put("study_uuid", rs.getString("study_uuid"));
+                    row.put("study_name", rs.getString("study_name"));
+                    rows.add(row);
+                }
             }
         } catch (Exception ex) {
             ex.printStackTrace();
-        } finally {
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
         }
-        return result;
-    }
-
-    public String getEnrollmentName(String enrollUUID) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        String result = "";
-
-        try {
-            String query = "SELECT name FROM protocol_types WHERE protocol_type_uuid IN (SELECT protocol_type_uuid FROM enrollments WHERE enrollment_uuid = ?::uuid)";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, enrollUUID);
-            rs = stmt.executeQuery();
-            if (rs.next()) {
-                result = rs.getString(1);
-            }
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-        return result;
-    }
-
-    // remove all but latest 50 rows from save state
-    public void pruneSaveStateEntries(String enrollment_uuid) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        try {
-            String query = "DELETE FROM save_state WHERE ts NOT IN (SELECT ts FROM save_state WHERE enrollment_uuid = ?::uuid ORDER BY ts DESC LIMIT 50) AND enrollment_uuid = ?::uuid";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, enrollment_uuid);
-            stmt.setString(2, enrollment_uuid);
-            stmt.executeUpdate();
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-    }
-
-    public boolean uploadSaveState(String stateJSON, String participant_uuid, String protocol) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        try {
-            String enrollment_uuid = getEnrollmentUUID(participant_uuid, protocol);
-            if (enrollment_uuid == null)
-                return false;
-            pruneSaveStateEntries(enrollment_uuid);
-            String query = "INSERT INTO save_state (enrollment_uuid, ts, state_json) VALUES (?::uuid, timezone('utc', now()), ?::jsonb)";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, enrollment_uuid);
-            stmt.setString(2, stateJSON);
-            stmt.executeUpdate();
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-        return true;
-    }
-
-    public String getParticipantCurrentState(String partUUID, String protocol) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        String result = "";
-        try {
-            String query = "SELECT log_json->>'state' FROM state_log WHERE participant_uuid = ?::uuid AND log_json->>'protocol' = ? ORDER BY ts DESC LIMIT 1";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, partUUID);
-            stmt.setString(2, protocol);
-            rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                result = rs.getString(1);
-            }
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-        return result;
-    }
-
-    public String getSaveState(String participantUUID, String protocol) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        String json = "";
-        try {
-            String query = "SELECT state_json FROM save_state WHERE enrollment_uuid = ?::uuid ORDER BY ts DESC LIMIT 1";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, getEnrollmentUUID(participantUUID, protocol));
-            rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                json = rs.getString(1);
-            }
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-        return json;
-    }
-
-    public void checkQueuedMessageDatabase() {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-
-        try {
-            String query = "SELECT message_uuid, study, toNumber, message_json->>'Body' AS body FROM queued_messages WHERE scheduledFor <= NOW()";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            rs = stmt.executeQuery();
-
-            while (rs.next()) {
-                String toNumber = rs.getString("toNumber");
-                String messageJson = rs.getString("body");
-                String messageId = rs.getString("message_uuid");
-                String study = rs.getString("study");
-                removeFromQueuedMessage(messageId);
-            }
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-    }
-
-    public void removeFromQueuedMessage(String messageId) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-
-        try {
-            String query = "DELETE FROM queued_messages where message_uuid = ?::uuid";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, messageId);
-            stmt.executeUpdate();
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-    }
-
-    public String getEnrollmentUUID(String uuid, String protocol) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        String result = null;
-        try {
-            String query = "SELECT enrollment_uuid FROM enrollments WHERE participant_uuid = ?::uuid AND status = true AND protocol_type_uuid IN (SELECT protocol_type_uuid FROM protocol_types WHERE name = ?)";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, uuid);
-            stmt.setString(2, protocol);
-            rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                result = rs.getString(1);
-            }
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-        return result;
-    }
-
-    public ArrayList<String> getAdminNumbers() {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        ArrayList<String> adminNumbers = new ArrayList<>();
-
-        try {
-            String query = "SELECT phone_number FROM users WHERE EXISTS (SELECT 1 FROM user_roles WHERE role_name = 'Study Admin' AND role_id = ANY(users.roles))";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            rs = stmt.executeQuery();
-
-            while (rs.next()) {
-                adminNumbers.add(rs.getString(1));
-            }
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-        return adminNumbers;
-    }
-
-    public String generateAndSaveToken(String participantUUID) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        String token = "";
-
-        try {
-            String query = "INSERT INTO surveys (token, participant_uuid, created_at) VALUES (gen_random_uuid(), ?::uuid, (now() at time zone 'utc')) RETURNING token";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, participantUUID);
-            rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                token = rs.getString(1);
-            }
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-        return token;
+        return rows;
     }
 
     public String getParticipantIdFromDevice(String devEUI) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        String participantId = "";
-
-        try {
-            String query = "SELECT participant_uuid FROM participants WHERE participant_json->>'devEUI' = ?";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
+        String query = "SELECT participant_uuid FROM participants WHERE participant_json->>'devEUI' = ?";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
             stmt.setString(1, devEUI.toLowerCase());
-            rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                participantId = rs.getString("participant_uuid");
-            }
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-        return participantId;
-    }
-
-    public void saveGlucoseResults(String participantUUID, String result) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-
-        try {
-            String query = "UPDATE state_log SET log_json = jsonb_set(log_json, '{glucoseReading}', to_jsonb(?)) WHERE ts IN (SELECT ts FROM state_log WHERE participant_uuid = ?::uuid AND log_json->>'state' = 'startReading' ORDER BY ts DESC LIMIT 1)";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, result);
-            stmt.setString(2, participantUUID);
-            stmt.executeUpdate();
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-    }
-
-    public String getGlucoseResults(String participantUUID) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        String result = "";
-
-        try {
-            String query = "SELECT log_json->>'glucoseReading' AS reading FROM state_log WHERE participant_uuid = ?::uuid AND log_json->>'state' = 'startReading' AND log_json->>'glucoseReading' IS NOT NULL ORDER BY ts DESC LIMIT 1";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, participantUUID);
-            rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                result = rs.getString("reading");
-            }
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-        return result;
-    }
-
-    public String getStudyFromParticipantId(String uuid) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        String studies = "";
-
-        try {
-            String query = "SELECT study FROM participants WHERE participant_uuid=?";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, uuid);
-            rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                studies = rs.getString("study");
-            }
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        } finally {
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-        }
-        return studies;
-    }
-
-    public Map<String, List<String>> getProtocolFromParticipantId(String uuid) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        Map<String, List<String>> protocol = new HashMap<>();
-
-        try {
-            String query = "SELECT study, name FROM protocol_types WHERE protocol_type_uuid IN (SELECT protocol_type_uuid FROM enrollments WHERE participant_uuid = ? AND status = true)";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, uuid);
-            rs = stmt.executeQuery();
-
-            while (rs.next()) {
-                String study = rs.getString("study");
-                if (!protocol.containsKey(study)) {
-                    protocol.put(study, new ArrayList<>());
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
                 }
-                protocol.get(study).add(rs.getString("name"));
             }
-
         } catch (Exception ex) {
             ex.printStackTrace();
-        } finally {
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
         }
-        return protocol;
+        return "";
     }
 
-    public String getParticipantTimezone(String participantUUID) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        String tz = "";
-
-        try {
-            String query = "SELECT participant_json->>'time_zone' AS tz FROM participants WHERE participant_uuid = ?::uuid";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
-            stmt.setString(1, participantUUID);
-            rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                tz = rs.getString("tz");
+    public String getParticipantTimezone(String participantUuid) {
+        String query = "SELECT participant_json->>'time_zone' AS tz FROM participants WHERE participant_uuid = ?::uuid";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, participantUuid);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString("tz");
+                }
             }
-
         } catch (Exception ex) {
             ex.printStackTrace();
-        } finally {
-            try {
-                rs.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
         }
-        return tz;
+        return "";
+    }
+
+    public String getStudyFromNumber(String studyUuid) {
+        String query = "SELECT settings->>'twilio_from_number' FROM studies WHERE study_uuid = ?::uuid";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, studyUuid);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return null;
+    }
+
+    public void saveDeviceResult(String participantUuid, String stateName, String result) {
+        String query = "UPDATE state_log SET log_json = jsonb_set(log_json, '{deviceReading}', to_jsonb(?)) WHERE ts IN (SELECT ts FROM state_log WHERE participant_uuid = ?::uuid AND log_json->>'state' = ? ORDER BY ts DESC LIMIT 1)";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, result);
+            stmt.setString(2, participantUuid);
+            stmt.setString(3, stateName);
+            stmt.executeUpdate();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    public String getDeviceResult(String participantUuid) {
+        String query = "SELECT log_json->>'deviceReading' AS reading FROM state_log WHERE participant_uuid = ?::uuid AND log_json->>'deviceReading' IS NOT NULL ORDER BY ts DESC LIMIT 1";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, participantUuid);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString("reading");
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return "";
+    }
+
+    public String generateAndSaveToken(String participantUuid, String studyUuid, String enrollmentUuid, String surveyKey, String questionsJson) {
+        String query = "INSERT INTO surveys (token, participant_uuid, study_uuid, enrollment_uuid, survey_key, questions_json, created_at) VALUES (gen_random_uuid(), ?::uuid, ?::uuid, ?::uuid, ?, ?::jsonb, (now() at time zone 'utc')) RETURNING token";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, participantUuid);
+            stmt.setString(2, studyUuid);
+            stmt.setString(3, enrollmentUuid);
+            stmt.setString(4, surveyKey);
+            stmt.setString(5, questionsJson);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return "";
     }
 
     public void saveSurveyResponses(JSONObject answers, String token) {
-        Connection conn = null;
-        PreparedStatement stmt = null;
-
-        try {
-            String query = "UPDATE surveys SET finished_at=timezone('utc', now()), survey_json=?::jsonb WHERE token=?::uuid";
-            conn = ds.getConnection();
-            stmt = conn.prepareStatement(query);
+        if (token == null) {
+            return;
+        }
+        String query = "UPDATE surveys SET finished_at = timezone('utc', now()), survey_json = ?::jsonb WHERE token = ?::uuid";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
             stmt.setString(1, answers.toString());
             stmt.setString(2, token);
             stmt.executeUpdate();
-
         } catch (Exception ex) {
             ex.printStackTrace();
-        } finally {
-            try {
-                stmt.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
-            try {
-                conn.close();
-            } catch (Exception e) {
-                /* Null Ignored */ }
+        }
+    }
+
+    public void saveEventTime(String participantUuid, String stateName, String field, long epochSeconds) {
+        String query = "UPDATE state_log SET log_json = jsonb_set(log_json, ARRAY[?], to_jsonb(?::bigint)) WHERE ts IN (SELECT ts FROM state_log WHERE participant_uuid = ?::uuid AND log_json->>'state' = ? ORDER BY ts DESC LIMIT 1)";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, field);
+            stmt.setLong(2, epochSeconds);
+            stmt.setString(3, participantUuid);
+            stmt.setString(4, stateName);
+            stmt.executeUpdate();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    public void flagLastIncomingMessage(String participantUuid, String flag) {
+        String query = "UPDATE messages SET message_json = jsonb_set(message_json, ARRAY[?], to_jsonb('true'::text)) WHERE ts IN (SELECT ts FROM messages WHERE participant_uuid = ?::uuid AND message_direction = 'incoming' ORDER BY ts DESC LIMIT 1)";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, flag);
+            stmt.setString(2, participantUuid);
+            stmt.executeUpdate();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    public long[] getTreCounters(String participantUuid, String anchorState) {
+        String query = "SELECT COALESCE((log_json->>'successful_TRE')::bigint, 0), COALESCE((log_json->>'total_TRE')::bigint, 0), COALESCE((log_json->>'after8pm')::bigint, 0) FROM state_log WHERE participant_uuid = ?::uuid AND log_json->>'state' = ? AND log_json ?? 'total_TRE' ORDER BY ts DESC LIMIT 1";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, participantUuid);
+            stmt.setString(2, anchorState);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return new long[]{rs.getLong(1), rs.getLong(2), rs.getLong(3)};
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return new long[]{0, 0, 0};
+    }
+
+    public void setTreCounters(String participantUuid, String anchorState, long successful, long total, long after8pm) {
+        String query = "UPDATE state_log SET log_json = log_json || jsonb_build_object('successful_TRE', ?::bigint, 'total_TRE', ?::bigint, 'after8pm', ?::bigint) WHERE ts IN (SELECT ts FROM state_log WHERE participant_uuid = ?::uuid AND log_json->>'state' = ? ORDER BY ts DESC LIMIT 1)";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setLong(1, successful);
+            stmt.setLong(2, total);
+            stmt.setLong(3, after8pm);
+            stmt.setString(4, participantUuid);
+            stmt.setString(5, anchorState);
+            stmt.executeUpdate();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    public void setEatingWindowDuration(String participantUuid, String anchorState, long seconds) {
+        String query = "UPDATE state_log SET log_json = jsonb_set(log_json, '{eating_window_duration}', to_jsonb(?::bigint)) WHERE ts IN (SELECT ts FROM state_log WHERE participant_uuid = ?::uuid AND log_json->>'state' = ? ORDER BY ts DESC LIMIT 1)";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setLong(1, seconds);
+            stmt.setString(2, participantUuid);
+            stmt.setString(3, anchorState);
+            stmt.executeUpdate();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    public String getStudyContactPhone(String studyUuid) {
+        String query = "SELECT contact_phone FROM studies WHERE study_uuid = ?::uuid";
+        try (Connection conn = ds.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, studyUuid);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return null;
+    }
+
+    public void close() {
+        try {
+            ds.close();
+        } catch (Exception ex) {
+            ex.printStackTrace();
         }
     }
 }

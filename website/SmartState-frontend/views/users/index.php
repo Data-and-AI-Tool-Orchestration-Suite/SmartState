@@ -2,6 +2,17 @@
 /** @var User $user */
 $page = "users";
 global $rootURL;
+require_once MODELS_DIR . 'Study.php';
+$studyOptions = [];
+if ($user->isSuperAdmin()) {
+    $studyOptions = Study::allForSelect();
+} else {
+    foreach ($user->getMemberships() as $membership) {
+        if ($membership['study_uuid'] === $user->getCurrentStudy()) {
+            $studyOptions[] = ['study_uuid' => $membership['study_uuid'], 'name' => $membership['study_name']];
+        }
+    }
+}
 include_once __DIR__ . '/../_header.php';
 ?>
     <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-2 mb-3 border-bottom">
@@ -25,7 +36,7 @@ include_once __DIR__ . '/../_header.php';
                     <th>Organization</th>
                     <th>Affiliation</th>
                     <th>IDP</th>
-                    <th>Roles</th>
+                    <th>Memberships</th>
                     <th>Actions</th>
                 </tr>
                 </thead>
@@ -43,7 +54,7 @@ include_once __DIR__ . '/../_header.php';
                     <th>Organization</th>
                     <th>Affiliation</th>
                     <th>IDP</th>
-                    <th>Roles</th>
+                    <th>Memberships</th>
                     <th>Actions</th>
                 </tr>
                 </tfoot>
@@ -52,7 +63,7 @@ include_once __DIR__ . '/../_header.php';
     </div>
 
     <div class="modal fade" id="userModal" tabindex="-1" role="dialog" aria-labelledby="userModalLabel" aria-hidden="true">
-        <div class="modal-dialog" role="document">
+        <div class="modal-dialog modal-lg" role="document">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="userModalLabel">User Management</h5>
@@ -68,14 +79,23 @@ include_once __DIR__ . '/../_header.php';
                             </div>
                         </div>
                     </div>
+                    <?php if ($user->isSuperAdmin()) : ?>
                     <div class="row">
                         <div class="col-md-12">
-                            <div class="input-group mb-3">
-                                <label class="input-group-text" for="user-roles">Roles</label>
-                                <select id="user-roles" class="form-select" aria-label="Select User Role" title="Select User Role"></select>
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" role="switch" id="user-super-admin">
+                                <label class="form-check-label" for="user-super-admin">Super Admin</label>
                             </div>
                         </div>
                     </div>
+                    <?php endif; ?>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0">Study Memberships</h6>
+                        <button type="button" class="btn btn-outline-success btn-sm" onclick="add_membership_row();">
+                            <i class="fas fa-plus"></i> Add Membership
+                        </button>
+                    </div>
+                    <div id="membership-rows"></div>
                     <div class="study-admin-extras" style="display:none">
                         <hr>
                         <h6>Please enter your phone number and timezone to receive alerts about participants.</h6>
@@ -111,6 +131,8 @@ include_once __DIR__ . '/../_header.php';
         var users = {};
         var userModal = $('#userModal');
         var roles = {};
+        var studyOptions = <?= json_encode(array_values($studyOptions)) ?>;
+        var loggedInIsSuperAdmin = <?= $user->isSuperAdmin() ? 'true' : 'false' ?>;
 
         $(function() {
             users_datatable = users_table.DataTable({
@@ -201,10 +223,12 @@ include_once __DIR__ . '/../_header.php';
                         data: null,
                         render: function (data) {
                             let html = "";
-                            const roles = JSON.parse(data.roles);
-                            for (const [roleId, roleName] of Object.entries(roles)) {
-                                html += `${roleName}<br>`;
+                            if (data.is_super_admin) {
+                                html += "<span class='badge bg-danger'>Super Admin</span><br>";
                             }
+                            data.memberships.forEach(function(membership) {
+                                html += `${membership.study_name} - ${membership.role_name}<br>`;
+                            });
                             return html;
                         }
                     },
@@ -232,7 +256,6 @@ include_once __DIR__ . '/../_header.php';
                     success:
                         function(result){
                             $.each(result.roles, function(index){
-                                $('#user-roles').append('<option value="'+result.roles[index][0]+'">'+result.roles[index][1]+'</option>');
                                 roles[result.roles[index][0]] = result.roles[index][1];
                             });
                         }
@@ -256,13 +279,90 @@ include_once __DIR__ . '/../_header.php';
             });
         });
 
-        $('#user-roles').on('change', function() {
-            if ($(this).val() === "2") {
+        function study_admin_role_id() {
+            for (const [roleId, roleName] of Object.entries(roles)) {
+                if (roleName === 'Study Admin') {
+                    return String(roleId);
+                }
+            }
+            return null;
+        }
+
+        function add_membership_row(selectedStudy, selectedRole) {
+            let studyHtml = '';
+            studyOptions.forEach(function(study) {
+                let sel = (selectedStudy && String(selectedStudy) === String(study.study_uuid)) ? ' selected' : '';
+                studyHtml += `<option value="${study.study_uuid}"${sel}>${study.name}</option>`;
+            });
+            let roleHtml = '';
+            for (const [roleId, roleName] of Object.entries(roles)) {
+                let sel = (selectedRole && String(selectedRole) === String(roleId)) ? ' selected' : '';
+                roleHtml += `<option value="${roleId}"${sel}>${roleName}</option>`;
+            }
+            let row = $(`<div class="row membership-row mb-2">
+                    <div class="col-md-6">
+                        <div class="input-group">
+                            <span class="input-group-text">Study</span>
+                            <select class="form-select membership-study">${studyHtml}</select>
+                        </div>
+                    </div>
+                    <div class="col-md-5">
+                        <div class="input-group">
+                            <span class="input-group-text">Role</span>
+                            <select class="form-select membership-role">${roleHtml}</select>
+                        </div>
+                    </div>
+                    <div class="col-md-1 d-flex align-items-center">
+                        <button type="button" class="btn btn-outline-danger btn-sm remove-membership-row">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>`);
+            row.find('.remove-membership-row').on('click', function() {
+                row.remove();
+                toggle_study_admin_extras();
+            });
+            row.find('.membership-role').on('change', toggle_study_admin_extras);
+            $('#membership-rows').append(row);
+            toggle_study_admin_extras();
+        }
+
+        function toggle_study_admin_extras() {
+            let adminRoleId = study_admin_role_id();
+            let hasStudyAdmin = false;
+            $('#membership-rows .membership-role').each(function() {
+                if (String($(this).val()) === String(adminRoleId)) {
+                    hasStudyAdmin = true;
+                }
+            });
+            if (hasStudyAdmin) {
                 $('.study-admin-extras').show();
             } else {
                 $('.study-admin-extras').hide();
             }
-        });
+        }
+
+        function collect_memberships() {
+            let memberships = [];
+            let seen = {};
+            let valid = true;
+            $('#membership-rows .membership-row').each(function() {
+                let studyUuid = $(this).find('.membership-study').val();
+                let roleId = $(this).find('.membership-role').val();
+                if (!studyUuid || !roleId) {
+                    valid = false;
+                    return;
+                }
+                if (seen[studyUuid]) {
+                    valid = false;
+                    showError('A user may only have one role per study.');
+                    return;
+                }
+                seen[studyUuid] = true;
+                memberships.push({'study_uuid': studyUuid, 'role_id': roleId});
+            });
+            return valid ? memberships : null;
+        }
 
         function fillTimeZones(selected) {
             let location = $("#user-location").val();
@@ -310,15 +410,25 @@ include_once __DIR__ . '/../_header.php';
                 return;
             }
 
-            let user_role = $('#user-roles').val();
-            if (user_role === null){
-                showError('Please choose this user\'s role.');
+            let isSuperAdmin = loggedInIsSuperAdmin && $('#user-super-admin').is(':checked');
+
+            let memberships = collect_memberships();
+            if (memberships === null) {
+                return;
+            }
+            if (memberships.length === 0 && !isSuperAdmin) {
+                showError('Please add at least one study membership.');
                 return;
             }
 
+            let adminRoleId = study_admin_role_id();
+            let hasStudyAdmin = memberships.some(function(membership) {
+                return String(membership.role_id) === String(adminRoleId);
+            });
+
             let number = "";
             let timezone = "";
-            if (user_role === "2") {
+            if (hasStudyAdmin) {
                 timezone = $('#user-timezone').val();
                 if (timezone === null) {
                     showError('Please choose this user\'s timezone.');
@@ -343,7 +453,8 @@ include_once __DIR__ . '/../_header.php';
                 'email': user_email,
                 'number': number,
                 'timezone': timezone,
-                'role': [user_role]
+                'memberships': memberships,
+                'is_super_admin': isSuperAdmin ? 'true' : 'false'
             };
 
             $.ajax({
@@ -384,26 +495,34 @@ include_once __DIR__ . '/../_header.php';
             if (user !== null) {
                 $('#user-id').val(user.id);
                 $('#user-email').val(user.eppn);
+                if (loggedInIsSuperAdmin) {
+                    $('#user-super-admin').prop('checked', user.is_super_admin === true);
+                }
 
-                let usersRoles = JSON.parse(user.roles);
-                let selectedRoles = Object.keys(roles).filter(roleId => usersRoles.hasOwnProperty(roleId));
-                $('#user-roles').val(selectedRoles);
+                $('#membership-rows').empty();
+                user.memberships.forEach(function(membership) {
+                    add_membership_row(membership.study_uuid, membership.role_id);
+                });
+                toggle_study_admin_extras();
 
-                if (selectedRoles.includes("2")) {
-                    $('.study-admin-extras').show();
+                let adminRoleId = study_admin_role_id();
+                let hasStudyAdmin = user.memberships.some(function(membership) {
+                    return String(membership.role_id) === String(adminRoleId);
+                });
+                if (hasStudyAdmin) {
                     $('#user-number').val((user.number && user.number !== "") ? user.number.slice(2) : "");
-                    $('#user-location').val(user.timezone.includes('/') ? user.timezone.split('/')[0] : user.timezone);
-                    $('#user-location').selectpicker('refresh');
-                    fillTimeZones(user.timezone);
-                } else {
-                    $('.study-admin-extras').hide();
+                    if (user.timezone) {
+                        $('#user-location').val(user.timezone.includes('/') ? user.timezone.split('/')[0] : user.timezone);
+                        $('#user-location').selectpicker('refresh');
+                        fillTimeZones(user.timezone);
+                    }
                 }
             }
         }
 
         function edit_user(user_id) {
             let row_data = users_datatable.rows().data().filter(function(data, index){
-                return data['id'] === user_id;  // Assuming 'id' is the first column
+                return data['id'] === user_id;
             }).toArray();
             fill_user_form(row_data[0]);
             userModal.modal('show');
@@ -412,7 +531,8 @@ include_once __DIR__ . '/../_header.php';
         function clear_user_form() {
             $('#user-id').val('');
             $('#user-email').val('');
-            $('#user-roles').val('1');
+            $('#user-super-admin').prop('checked', false);
+            $('#membership-rows').empty();
             $('#user-number').val('');
             $('#user-location').val('');
             $('#user-location').selectpicker('refresh');
@@ -423,6 +543,12 @@ include_once __DIR__ . '/../_header.php';
 
         userModal.on('hidden.bs.modal', function() {
             clear_user_form();
+        });
+
+        userModal.on('show.bs.modal', function() {
+            if ($('#membership-rows .membership-row').length === 0 && $('#user-id').val() === '') {
+                add_membership_row();
+            }
         });
 
         function validateEmail(email) {

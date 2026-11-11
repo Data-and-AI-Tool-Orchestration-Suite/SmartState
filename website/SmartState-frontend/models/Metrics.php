@@ -8,28 +8,67 @@ class Metrics implements JsonSerializable {
     protected string $json;
 
 
-    public static function getTotalCompliance(): array {
-        $query = "SELECT 
-                    TO_CHAR(ts - INTERVAL '1 day', 'Dy') AS day_of_week,
-                    SUM(CAST(metric_json->>'good_compliance' AS INTEGER)) AS total_good, 
-                    SUM(CAST(metric_json->>'total_compliance' AS INTEGER)) AS total_total 
+    public static function getTotalCompliance(string $studyUuid): array {
+        $query = "SELECT
+                    TO_CHAR(ts, 'Dy') AS day_of_week,
+                    SUM(CAST(metric_json->>'good_compliance' AS INTEGER)) AS total_good,
+                    SUM(CAST(metric_json->>'total_compliance' AS INTEGER)) AS total_total
                   FROM metrics
+                  WHERE study_uuid = :study_uuid
+                    AND ts >= (NOW() AT TIME ZONE 'utc') - INTERVAL '7 days'
                   GROUP BY day_of_week
                   ORDER BY MIN(ts)";
-        $stmt = PostgresDB::run($query);
+        $stmt = PostgresDB::run($query, ['study_uuid' => $studyUuid]);
         $results = [];
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
             $results[] = array(
                 'day_of_week' => $row['day_of_week'],
-                'total_good' => $row['total_good'],
-                'total_total' => $row['total_total']
+                'total_good' => (int) $row['total_good'],
+                'total_total' => (int) $row['total_total']
             );
         }
         return $results;
     }
 
+    public static function getStateDistribution(string $studyUuid): array {
+        $query = "SELECT log_json->>'state' AS state, COUNT(*) AS count
+                  FROM (SELECT DISTINCT ON (participant_uuid, log_json->>'protocol') participant_uuid, log_json
+                        FROM state_log
+                        WHERE study_uuid = :study_uuid
+                        ORDER BY participant_uuid, log_json->>'protocol', ts DESC) latest
+                  GROUP BY 1
+                  ORDER BY 2 DESC";
+        $stmt = PostgresDB::run($query, ['study_uuid' => $studyUuid]);
+        $results = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $results[] = array(
+                'state' => $row['state'],
+                'count' => (int) $row['count']
+            );
+        }
+        return $results;
+    }
 
-
+    public static function getMessageVolume(string $studyUuid): array {
+        $query = "SELECT TO_CHAR(date_trunc('day', ts), 'YYYY-MM-DD') AS day,
+                         TRIM(message_direction) AS direction,
+                         COUNT(*) AS count
+                  FROM messages
+                  WHERE study_uuid = :study_uuid
+                    AND ts >= date_trunc('day', (NOW() AT TIME ZONE 'utc')) - INTERVAL '13 days'
+                  GROUP BY 1, 2
+                  ORDER BY 1";
+        $stmt = PostgresDB::run($query, ['study_uuid' => $studyUuid]);
+        $results = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $results[] = array(
+                'day' => $row['day'],
+                'direction' => $row['direction'],
+                'count' => (int) $row['count']
+            );
+        }
+        return $results;
+    }
 
 
     /**
