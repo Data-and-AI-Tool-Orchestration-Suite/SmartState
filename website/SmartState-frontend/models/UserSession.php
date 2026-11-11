@@ -11,6 +11,7 @@ class UserSession implements JsonSerializable {
     protected ?User $user;
     protected string $expires;
     protected ?AccessToken $token;
+    protected ?string $currentStudy = null;
 
     public function __construct() { }
 
@@ -137,6 +138,8 @@ class UserSession implements JsonSerializable {
         $this->session_id = $row['session_id'];
         $this->user = User::withId($row['user_id']);
         $this->expires = $row['expires'];
+        if (array_key_exists('current_study', $row))
+            $this->currentStudy = $row['current_study'];
         try {
             $this->token = new AccessToken(json_decode($row['token'], true));
         } catch (Firebase\JWT\ExpiredException) {
@@ -152,11 +155,11 @@ class UserSession implements JsonSerializable {
         $token = $this->getToken();
         $token = json_encode($token);
         if (is_null($exists)) {
-            $insert = "INSERT INTO  user_sessions (session_id, user_id, expires, token) VALUES (?,?,?,?)";
-            PostgresDB::run($insert, [$this->getSessionId(), $this->getUser()->getId(), $this->getExpires(), $token]);
+            $insert = "INSERT INTO  user_sessions (session_id, user_id, expires, token, current_study) VALUES (?,?,?,?,?)";
+            PostgresDB::run($insert, [$this->getSessionId(), $this->getUser()->getId(), $this->getExpires(), $token, $this->currentStudy]);
         } else {
-            $update = "UPDATE  user_sessions SET user_id=?, expires = ?, token = ?  WHERE session_id=?";
-            PostgresDB::run($update, [$this->getUser()->getId(), $this->getExpires(), $token, $this->getSessionId()]);
+            $update = "UPDATE  user_sessions SET user_id=?, expires = ?, token = ?, current_study = ?  WHERE session_id=?";
+            PostgresDB::run($update, [$this->getUser()->getId(), $this->getExpires(), $token, $this->currentStudy, $this->getSessionId()]);
         }
         return UserSession::withSessionID($this->getSessionId());
     }
@@ -193,6 +196,20 @@ class UserSession implements JsonSerializable {
 
     public function getExpires(): string {
         return $this->expires;
+    }
+
+    public function getCurrentStudy(): ?string {
+        return $this->currentStudy;
+    }
+
+    public function setCurrentStudy(?string $studyUuid): void {
+        $this->currentStudy = $studyUuid;
+        if ($this->getSessionId() !== "") {
+            PostgresDB::run(
+                "UPDATE user_sessions SET current_study = ? WHERE session_id = ?",
+                [$studyUuid, $this->getSessionId()]
+            );
+        }
     }
 
     /**

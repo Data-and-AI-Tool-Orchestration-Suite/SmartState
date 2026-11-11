@@ -7,7 +7,7 @@ global $rootURL;
     <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-2 mb-3 border-bottom">
         <h1 class="h4 mr-auto p-2">Messages - <span class="text-muted">Overview</span></h1>
         <div class="float-right">
-            <a href="<?= $rootURL; ?>/messages/export?study=Default" class="btn btn-secondary p-2 mr-2">
+            <a href="<?= $rootURL; ?>/messages/export" class="btn btn-secondary p-2 mr-2">
                 <i class="fas fa-download"></i>
                 Export Messages
             </a>
@@ -19,32 +19,70 @@ global $rootURL;
     </div>
     <div class="row">
         <div class="col">
-            <table id="collection" class="table table-bordered dt-responsive responsive-text" style="width:100%">
-                <thead>
-                <tr>
-                    <th>Outgoing/Incoming</th>
-                    <th>Participant Name</th>
-                    <th>Message Body</th>
-                    <th>Timestamp</th>
-                    <th>Time Zone</th>
-                </tr>
-                </thead>
-                <tbody>
-                </tbody>
-                <tfoot>
-                <tr>
-                    <th>Outgoing/Incoming</th>
-                    <th>Participant Name</th>
-                    <th>Message Body</th>
-                    <th>Timestamp</th>
-                    <th>Time Zone</th>
-                </tr>
-                </tfoot>
-            </table>
+            <ul class="nav nav-tabs" id="messagesTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="history-tab" data-bs-toggle="tab" data-bs-target="#history-pane" type="button" role="tab" aria-controls="history-pane" aria-selected="true">Message History</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="scheduled-tab" data-bs-toggle="tab" data-bs-target="#scheduled-pane" type="button" role="tab" aria-controls="scheduled-pane" aria-selected="false">Scheduled</button>
+                </li>
+            </ul>
+            <div class="tab-content pt-3" id="messagesTabsContent">
+                <div class="tab-pane fade show active" id="history-pane" role="tabpanel" aria-labelledby="history-tab">
+                    <table id="collection" class="table table-bordered dt-responsive responsive-text" style="width:100%">
+                        <thead>
+                        <tr>
+                            <th>Outgoing/Incoming</th>
+                            <th>Participant Name</th>
+                            <th>Message Body</th>
+                            <th>Timestamp</th>
+                            <th>Time Zone</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        </tbody>
+                        <tfoot>
+                        <tr>
+                            <th>Outgoing/Incoming</th>
+                            <th>Participant Name</th>
+                            <th>Message Body</th>
+                            <th>Timestamp</th>
+                            <th>Time Zone</th>
+                        </tr>
+                        </tfoot>
+                    </table>
+                </div>
+                <div class="tab-pane fade" id="scheduled-pane" role="tabpanel" aria-labelledby="scheduled-tab">
+                    <table id="scheduled-collection" class="table table-bordered dt-responsive responsive-text" style="width:100%">
+                        <thead>
+                        <tr>
+                            <th>Participant Name</th>
+                            <th>Message Body</th>
+                            <th>To Number</th>
+                            <th>Scheduled For</th>
+                            <th>Time Zone</th>
+                            <th>Cancel</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        </tbody>
+                        <tfoot>
+                        <tr>
+                            <th>Participant Name</th>
+                            <th>Message Body</th>
+                            <th>To Number</th>
+                            <th>Scheduled For</th>
+                            <th>Time Zone</th>
+                            <th>Cancel</th>
+                        </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 
-    <!-- Submit message modal -->  
+    <!-- Submit message modal -->
     <div class="modal fade" id="messageModal" tabindex="-1" role="dialog" aria-labelledby="messageModalLabel" aria-hidden="true">
         <div class="modal-dialog" role="document">
             <div class="modal-content">
@@ -87,7 +125,7 @@ global $rootURL;
             </div>
         </div>
     </div>
-   
+
     <script type="text/javascript">
         let messageModal = $('#messageModal');
         let messageModalParticipant = $('#messageModalParticipant');
@@ -96,18 +134,32 @@ global $rootURL;
         let collection = {};
         let collectionTable = $('#collection');
         let collectionDataTable = null;
+        let collectionScheduledTable = $('#scheduled-collection');
+        let collectionScheduledDataTable = null;
+
+        function isFlaggedMessage(json) {
+            try {
+                let message_json = JSON.parse(json);
+                return message_json.isAfter8pm === 'true' || message_json.isAfter8pm === true ||
+                    message_json.wakeBeforeSleep === 'true' || message_json.wakeBeforeSleep === true ||
+                    message_json.fromYesterday === 'true' || message_json.fromYesterday === true;
+            } catch (e) {
+                return false;
+            }
+        }
 
         $(function() {
             collectionDataTable = collectionTable.DataTable({
                 serverSide: true,
                 processing: true,
                 ajax: {
-                    url: "/messages/list",
-                    data: {'study': 'Default'}
+                    url: "<?= $rootURL ?>/messages/list"
                 },
                 order: [[ 3, "desc" ]],
                 responsive: true,
-                dom: 'Bfrtip',
+                layout: {
+                    topStart: 'buttons'
+                },
                 buttons: [
                     'pageLength', 'colvis'
                 ],
@@ -129,6 +181,11 @@ global $rootURL;
                     emptyTable: "No messages have been sent/received yet."
                 },
                 pagingType: "full_numbers",
+                createdRow: function (row, data) {
+                    if (isFlaggedMessage(data.json)) {
+                        $(row).addClass('table-warning');
+                    }
+                },
                 columns: [
                     {
                         data: 'direction'
@@ -152,10 +209,63 @@ global $rootURL;
                 ]
             });
 
-            collectionDataTable.buttons().container().prependTo('#collection_filter');
-            collectionDataTable.buttons().container().addClass('float-left');
-            $('.dt-buttons').addClass('btn-group-sm');
-            $('.dt-buttons div').addClass('btn-group-sm');
+            collectionScheduledDataTable = collectionScheduledTable.DataTable({
+                serverSide: true,
+                processing: true,
+                ajax: {
+                    url: "<?= $rootURL ?>/messages/scheduled"
+                },
+                order: [[ 3, "asc" ]],
+                responsive: true,
+                layout: {
+                    topStart: 'buttons'
+                },
+                buttons: [
+                    'pageLength', 'colvis'
+                ],
+                columnDefs: [
+                    {
+                        className: "dt-center",
+                        targets: '_all'
+                    },
+                    {
+                        orderable: false,
+                        targets: [5]
+                    }
+                ],
+                language: {
+                    emptyTable: "No messages are currently scheduled."
+                },
+                pagingType: "full_numbers",
+                columns: [
+                    {
+                        data: 'participant_name'
+                    },
+                    {
+                        data: null,
+                        render: function (data) {
+                            let body_json = JSON.parse(data.message_json);
+                            return body_json.Body;
+                        }
+                    },
+                    {
+                        data: 'to_number'
+                    },
+                    {
+                        data: 'scheduled_for'
+                    },
+                    {
+                        data: 'time_zone'
+                    },
+                    {
+                        data: null,
+                        render: function (data) {
+                            return '<button type="button" class="btn btn-sm btn-danger cancel-scheduled" data-uuid="' + data.message_uuid + '"><i class="fas fa-times"></i> Cancel</button>';
+                        }
+                    }
+                ]
+            });
+
             collectionTable.on('xhr.dt', function (e, settings, data) {
                 messages = {};
                 $.each(data.data, function(i, v) {
@@ -163,6 +273,13 @@ global $rootURL;
                 });
             });
 
+            $('#scheduled-tab').on('shown.bs.tab', function () {
+                collectionScheduledDataTable.columns.adjust();
+            });
+
+            collectionScheduledTable.on('click', '.cancel-scheduled', function () {
+                cancel_scheduled_message($(this).data('uuid'));
+            });
         });
 
         messageModal.on('hidden.bs.modal', function() {
@@ -177,9 +294,8 @@ global $rootURL;
         }
 
         $(document).ready( function () {
-            // ajax to get Participant Name (Phone number)
             $.ajax({
-                url: '/participants/all',
+                url: '<?= $rootURL ?>/participants/all',
                 type: 'GET',
                 success: function(data) {
                     if (data.success) {
@@ -203,21 +319,44 @@ global $rootURL;
             });
         });
 
+        function cancel_scheduled_message(uuid) {
+            $.ajax({
+                url: '<?= $rootURL ?>/messages/cancel-scheduled',
+                type: 'POST',
+                data: {
+                    'message_uuid': uuid
+                },
+                success: function(data) {
+                    if (data.success) {
+                        showSuccess('Scheduled message cancelled.');
+                        collectionScheduledDataTable.ajax.reload();
+                    } else {
+                        showError(data.error_message);
+                        return null;
+                    }
+                },
+                error: function (xhr, status, error) {
+                    console.error(xhr.responseText);
+                    console.error(status);
+                    console.error(error);
+                    showError("Error communicating with the server.");
+                    return null;
+                }
+            });
+        }
+
         function send_message(){
             let scheduled_time = -1;
             if ($("#scheduledCheckbox").prop("checked")){
                 scheduled_time = $("#scheduledDateTime").val();
             }
-            //  format 2023-10-30T10:14
 
-            // ajax to send message
             $.ajax({
-                url: '/messages/send',
+                url: '<?= $rootURL ?>/messages/send',
                 type: 'POST',
                 data: {
                     'participant_uuid': messageModalParticipant.val(),
                     'body': messageModalMessage.val(),
-                    'study': 'Default',
                     'time_to_send': scheduled_time
                 },
                 success: function(data) {

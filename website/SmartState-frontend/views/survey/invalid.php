@@ -10,13 +10,10 @@ include_once __DIR__ . '/../_header_no_sidebar.php';
         <div class="col-md-12">
             <h1 class="text-center">This survey link is invalid or has expired.</h1>
             <br>
-            <h4 class="text-center">Please contact the study administrator if you believe this is an error.</h4>
-            <br>
-            <p class="text-center"><a href="tel:18005555555" class="btn btn-primary"><i class="fa fa-phone"></i> 1-800-555-5555</a></p>
-            
+            <h4 class="text-center">If you believe this is an error, please contact your study administrator.</h4>
         </div>
     </div>
-   
-   
+
+
 <?php
 include_once __DIR__ . '/../_footer.php';

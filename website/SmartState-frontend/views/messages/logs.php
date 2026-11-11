@@ -2,9 +2,14 @@
 /** @var UserSession $userSession */
 $page = 'messages-log';
 include_once __DIR__ . '/../_header.php';
+global $rootURL;
 ?>
     <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-2 mb-3 border-bottom">
         <h1 class="h4 mr-auto p-2">Messages - <span class="text-muted">Logs</span></h1>
+        <button id="export-participant" class="btn btn-secondary p-2 mr-2">
+            <i class="fas fa-download"></i>
+            Export CSV
+        </button>
     </div>
 
     <div class="row">
@@ -42,13 +47,20 @@ include_once __DIR__ . '/../_header.php';
     </div>
 
     <script type="text/javascript">
-        var messageModal = $('#messageModal');
-        var messageModalParticipant = $('#messageModalParticipant');
-        var messageModalMessage = $('#messageModalMessage');
-
         var collection = {};
         var collectionTable = $('#collection');
         var collectionDataTable = null;
+
+        function isFlaggedMessage(json) {
+            try {
+                let message_json = JSON.parse(json);
+                return message_json.isAfter8pm === 'true' || message_json.isAfter8pm === true ||
+                    message_json.wakeBeforeSleep === 'true' || message_json.wakeBeforeSleep === true ||
+                    message_json.fromYesterday === 'true' || message_json.fromYesterday === true;
+            } catch (e) {
+                return false;
+            }
+        }
 
         function updateDT() {
             let uuid = $('#select-participant-message').val();
@@ -58,7 +70,7 @@ include_once __DIR__ . '/../_header.php';
                 serverSide: true,
                 processing: true,
                 ajax: {
-                    url: "/messages/get-message-log",
+                    url: "<?= $rootURL ?>/messages/get-message-log",
                     type: "GET",
                     data: {
                         'uuid': uuid
@@ -87,6 +99,11 @@ include_once __DIR__ . '/../_header.php';
                     emptyTable: "No messages have been sent/received from the selected user."
                 },
                 pagingType: "full_numbers",
+                createdRow: function (row, data) {
+                    if (isFlaggedMessage(data.json)) {
+                        $(row).addClass('table-warning');
+                    }
+                },
                 columns: [
                     {
                         data: 'direction'
@@ -96,7 +113,7 @@ include_once __DIR__ . '/../_header.php';
                         render: function (data) {
                             let body_json = JSON.parse(data.json);
                             return body_json.Body;
-                        } 
+                        }
                     },
                     {
                         data: 'ts',
@@ -108,13 +125,12 @@ include_once __DIR__ . '/../_header.php';
 
         $(document).ready( function () {
             $.ajax({
-                url : '/participants/all',
+                url : '<?= $rootURL ?>/participants/all',
                 type : 'GET',
 
                 success : function(data) {
                     if (data.success) {
                         data.participants.forEach(function(currentValue, index, arr){
-                            // parse json;
                             let participant = JSON.parse(currentValue.json);
                             $('#select-participant-message').append("<option value='"+currentValue.uuid+"'>"+ participant.first_name + " "+ participant.last_name +"</option>");
                         });
@@ -137,10 +153,19 @@ include_once __DIR__ . '/../_header.php';
             updateTimeZone();
         });
 
+        $('#export-participant').click(function() {
+            let uuid = $('#select-participant-message').val();
+            if (!uuid) {
+                showError("Please select a participant to export.");
+                return;
+            }
+            window.location = '<?= $rootURL ?>/messages/export-participant?uuid=' + encodeURIComponent(uuid);
+        });
+
         function updateTimeZone() {
             let uuid = $('#select-participant-message').val();
             $.ajax({
-                url : '/participants/get-time-zone',
+                url : '<?= $rootURL ?>/participants/get-time-zone',
                 type : 'GET',
                 data: {'uuid': uuid},
                 success : function(data) {
@@ -148,7 +173,6 @@ include_once __DIR__ . '/../_header.php';
                         $('#time-zone').html("Time Zone: " + data.time_zone);
                     } else {
                         $('#time-zone').html("Time Zone: Unknown");
-                        // showError(data.error_message);
                         console.error(data.error_message);
                     }
                 },

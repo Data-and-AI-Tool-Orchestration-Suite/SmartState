@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "name": "DailyMessage",
+  "initialState": "initial",
+  "timers": ["timeout24Hours"],
+  "settings": {
+    "endProtocolEvent": "receivedEndProtocol",
+    "collection": "none"
+  },
+  "restore": {
+    "policy": "recompute-from-clock",
+    "terminalStates": ["endProtocol"],
+    "noSaveStateEvent": "receivedWaitDay",
+    "recomputeRules": [
+      {"if": {"type": "always"}, "fire": "receivedWaitDay"}
+    ],
+    "resetFire": "recomputeRules"
+  },
+  "eventMappings": {
+    "sms": {"defaultAction": "ignore"}
+  },
+  "states": {
+    "initial": {
+      "transitions": [
+        {"event": "receivedWaitDay", "to": "waitDay"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": []
+    },
+    "waitDay": {
+      "entry": [
+        {"type": "setTimer", "timer": "timeout24Hours", "deadline": {"type": "secondsToClock", "hour": 20, "minute": 0, "ifPastAddDay": true}}
+      ],
+      "transitions": [
+        {"after": "timeout24Hours", "to": "sendDailyMessage"},
+        {"event": "receivedEndProtocol", "to": "endProtocol"}
+      ],
+      "manualMoves": []
+    },
+    "sendDailyMessage": {
+      "entry": [
+        {
+          "type": "sendSms",
+          "templates": [
+            "Remember the golden rule: Once you end calories today, you need to be calorie free until tomorrow!",
+            "Develop a plan to help you stay calorie free overnight.",
+            "Hide snacks to curb late night nibbles.",
+            "If you struggle sticking with it, distract yourself with a hobby or a good book!",
+            "Drink fizzy water to help with the cravings.",
+            "Try drinking herbal tea for a tasty way to be calorie free.",
+            "New behaviors take time to adjust to, you've got this.",
+            "Enjoy black coffee or tea with no sugar and stay calorie free. Phew!",
+            "Top tip: drink fizzy water from a wine glass if you are craving a glass of vino.",
+            "Your own mind is your greatest motivator. You CAN do this!",
+            "It's not just on game shows where it helps to phone a friend. Chatting with friends helps distract you AND relax at the end of the day.",
+            "Plan your meals ahead of time so you're ready when your eating window starts!",
+            "Set reminders on your phone to help stay within your eating window.",
+            "Keep healthy snacks ready for your eating window to avoid last-minute unhealthy choices.",
+            "Distract yourself during cravings - go for a walk, read, or do a quick task!",
+            "Tell a friend or family member about your time-restricted eating plan to help with accountability.",
+            "Don't panic if you slip up - just return to your schedule the next day!",
+            "Celebrate the small wins - every day you stick to your time-restricted eating window is progress!",
+            "Remind yourself why you started. Your goals matter—every day you stick to the plan is progress!",
+            "Your body loves consistency! Eating within a set window helps align your metabolism with your circadian rhythms.",
+            "Time-restricted eating may help improve blood sugar and insulin sensitivity. Your consistency is paying off!"
+          ]
+        }
+      ],
+      "transitions": [{"auto": true, "to": "waitDay"}],
+      "manualMoves": []
+    },
+    "endProtocol": {
+      "terminal": true,
+      "transitions": [],
+      "manualMoves": []
+    }
+  }
+}

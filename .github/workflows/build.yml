@@ -1,0 +1,73 @@
+name: build
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+
+jobs:
+  java:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - run: ./mvnw -B -ntp verify
+
+  php:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website/SmartState-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: pdo, pdo_pgsql, curl, zip
+      - run: composer validate --strict
+      - run: composer install --no-interaction --no-progress
+      - run: |
+          fail=0
+          for f in $(find . -name '*.php' -not -path './vendor/*'); do
+            php -l "$f" > /dev/null || fail=1
+          done
+          exit $fail
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: docker compose build
+      - name: Verify PostgreSQL initialization with quoted credentials
+        env:
+          POSTGRES_DB: smartstate_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-postgres
+          ADMIN_EPPN: "ci/ops&'review@example.com"
+          APP_DB_PASSWORD: "ci/app&'quoted"
+          ENGINE_DB_PASSWORD: "ci/engine&'quoted"
+        run: |
+          trap 'docker compose logs postgres; docker compose down -v' EXIT
+          docker compose up -d postgres
+          for attempt in $(seq 1 60); do
+            if docker compose exec -T postgres pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"; then
+              break
+            fi
+            sleep 1
+          done
+          docker compose exec -T -e PGPASSWORD="$APP_DB_PASSWORD" postgres \
+            psql -h 127.0.0.1 -U smartstate_app -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c 'SELECT 1'
+          docker compose exec -T -e PGPASSWORD="$ENGINE_DB_PASSWORD" postgres \
+            psql -h 127.0.0.1 -U smartstate_engine -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c 'SELECT 1'
+          admin_count=$(printf '%s\n' "SELECT count(*) FROM users WHERE eppn = :'admin_eppn' AND is_super_admin;" | \
+            docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+              -v ON_ERROR_STOP=1 -v admin_eppn="$ADMIN_EPPN" -At)
+          test "$admin_count" = 1

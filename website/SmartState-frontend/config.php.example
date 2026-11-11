@@ -11,7 +11,7 @@
         'postgres' => [
             'host'              => '',
             'name'              => '',
-            'user'              => '',
+            'user'              => 'smartstate_app',
             'pass'              => '',
             'port'              => 5432 // default postgres port, change in docker-compose.yml
         ],
@@ -65,21 +65,5 @@
          * This specifies the Java API URL
          * @param string    $java_api_url URL for the Java API
          */
-        'java_api_url' => 'http://localhost:9000',
-
-        /**
-         * This specifies the LLM API URL
-         * @param string    $llm_api_url URL for the LLM API
-         * @param string    $llm_api_key API key for the LLM API
-         * @param string    $llm_model Model for the LLM API
-         */
-        'llm_api_url' => '',
-        'llm_api_key' => '',
-        'llm_model' => 'gpt-4o-mini',
-
-        /**
-         * This specifies the WebRAG API key
-         * @param string    $web_rag_api_key API key for the WebRAG API
-         */
-        'web_rag_api_key' => ''
+        'java_api_url' => 'http://engine:9000'
 ];
