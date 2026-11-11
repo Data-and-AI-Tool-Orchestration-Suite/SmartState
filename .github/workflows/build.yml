@@ -5,6 +5,9 @@ on:
     branches: [main, "feature/**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   java:
     runs-on: ubuntu-latest
@@ -33,6 +36,7 @@ jobs:
           extensions: pdo, pdo_pgsql, curl, zip
       - run: composer validate --strict
       - run: composer install --no-interaction --no-progress
+      - run: composer audit --locked --no-interaction
       - run: |
           fail=0
           for f in $(find . -name '*.php' -not -path './vendor/*'); do
