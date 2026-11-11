@@ -19,7 +19,7 @@ jobs:
         with:
           php-version: "8.4"
           extensions: pdo, pdo_pgsql, curl, zip
-      - run: composer update guzzlehttp/guzzle --with-dependencies --no-install --no-interaction --no-progress
+      - run: composer update guzzlehttp/guzzle symfony/filesystem --with-dependencies --no-install --no-interaction --no-progress
       - run: composer validate --strict
       - run: composer audit --locked --format=json > composer-audit.json
       - uses: actions/upload-artifact@v4

@@ -30,11 +30,19 @@ We prefer all communications to be in English.
 
 ## Secrets
 
-No credentials are committed to this repository. `.env`, `website/SmartState-frontend/config.php`,
-and `java/config.ini` are the only secret carriers and are gitignored. TLS certificates and keys
+No credentials belong in the current source tree. `.env`, `website/SmartState-frontend/config.php`,
+and `java/config.ini` are the secret configuration files and are gitignored. TLS certificates and keys
 (`*.crt`, `*.key`) are gitignored and generated at deploy time. If a secret is ever exposed, rotate
 it (Postgres passwords, CILogon client secret, LLM API key, Twilio credentials) and report the
 exposure as described above.
+
+### Historical TLS key
+
+Earlier public commits included `website/SmartState-backend/apache/mycert.key` for
+`smartstate.dev`. The associated certificate expired on October 30, 2023, and the key is absent
+from the current source. Treat this historical key as compromised: any deployment that reused
+it must generate a new private key and replace its certificate. Removing a file from the
+current tree does not remove it from Git history or invalidate copies of the key.
 
 ## Policy
 
