@@ -1,7 +1,6 @@
 {
   "name": "kentucky-open-science/smartstate",
   "description": "SmartState multi-tenant research protocol platform",
-  "version": "2.0.0",
   "minimum-stability": "stable",
   "license": "Apache-2.0",
   "authors": [
@@ -20,13 +19,13 @@
   ],
   "require": {
     "php": ">=8.4",
-    "altorouter/altorouter": "2.0.2",
+    "altorouter/altorouter": "^2.0.2",
     "ext-pdo": "*",
     "ext-json": "*",
-    "firebase/php-jwt": "*",
-    "cilogon/oauth2-cilogon": "*",
+    "firebase/php-jwt": "^7.1",
+    "cilogon/oauth2-cilogon": "^1.1.6",
     "league/oauth2-client": "^2.8",
-    "guzzlehttp/guzzle": "*",
+    "guzzlehttp/guzzle": "^7.15",
     "aws/aws-sdk-php": "^3.317.2",
     "twilio/sdk": "^8.3",
     "ext-curl": "*"
