@@ -27,7 +27,9 @@ public class TimezoneHelper {
         this.userTimezone = userTimezone;
         this.machineTimezone = machineTimezone;
         this.clock = clock;
-        logger.info("TimezoneHelper initialized with user timezone: " + userTimezone + " and machine timezone: " + machineTimezone);
+        logger.info("TimezoneHelper initialized with user timezone: {} and machine timezone: {}",
+                String.valueOf(userTimezone).replace('\r', '_').replace('\n', '_'),
+                String.valueOf(machineTimezone).replace('\r', '_').replace('\n', '_'));
     }
 
     private LocalDateTime nowUserLocal() {
