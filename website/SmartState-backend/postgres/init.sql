@@ -158,8 +158,8 @@ COMMIT;
 
 BEGIN;
 
-CREATE ROLE smartstate_app LOGIN PASSWORD '<APP_DB_PASSWORD>';
-CREATE ROLE smartstate_engine LOGIN PASSWORD '<ENGINE_DB_PASSWORD>' BYPASSRLS;
+CREATE ROLE smartstate_app LOGIN PASSWORD :'app_db_password';
+CREATE ROLE smartstate_engine LOGIN PASSWORD :'engine_db_password' BYPASSRLS;
 
 GRANT USAGE ON SCHEMA public TO smartstate_app, smartstate_engine;
 
@@ -286,7 +286,7 @@ INSERT INTO schema_migrations (filename) VALUES
 ON CONFLICT (filename) DO NOTHING;
 
 INSERT INTO users (id, eppn, is_super_admin) VALUES
-    ('notloggedin_123456', '<ADMIN_EPPN>', TRUE);
+    ('notloggedin_123456', :'admin_eppn', TRUE);
 
 INSERT INTO studies (study_uuid, name, settings) VALUES
     ('00000000-0000-0000-0000-000000000001', 'Default', '{}');
